@@ -1,0 +1,9 @@
+app.log
+AGENTS.md
+.env
+
+audio/
+uploads/
+.DS_Store
+.opencode/
+
