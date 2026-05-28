@@ -66,9 +66,7 @@ func Register(r *gin.Engine, h *Handler) {
 	v1 := r.Group("/api/v1")
 	r.Use(LoggerMiddleware)
 	{
-		v1.POST("/audio/generate", h.Generate)
 		v1.POST("/chat", h.Chat)
-		v1.GET("/audio/:task_id/stream", h.StreamTask)
 		v1.GET("/audio/:task_id", h.GetTask)
 		v1.POST("/upload", h.UploadFile)
 		v1.DELETE("/upload/:file_ref_id", h.DeleteFile)
@@ -76,40 +74,10 @@ func Register(r *gin.Engine, h *Handler) {
 	r.GET("/api/audio/:filename", h.DownloadAudio)
 }
 
-type generateReq struct {
-	Topic       string `json:"topic"`
-	Style       string `json:"style"`
-	DurationMin int    `json:"duration_min,omitempty"`
-	FilePath    string `json:"file_path,omitempty"`
-}
-
 type resumeReq struct {
 	CheckpointID string `json:"checkpoint_id"`
 	InterruptID  string `json:"interrupt_id"`
 	Choice       string `json:"choice"`
-}
-
-func (h *Handler) Generate(c *gin.Context) {
-	var req generateReq
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(400, gin.H{"error": err.Error()})
-		return
-	}
-
-	ctx := context.Background()
-	userInput := fmt.Sprintf("用户话题：%s\n风格要求：%s", req.Topic, req.Style)
-	if req.FilePath != "" {
-		userInput = fmt.Sprintf("用户上传文件：%s\n%s", req.FilePath, userInput)
-	}
-	if req.FilePath != "" && req.Topic == "" {
-		t := h.tm.CreateTask(userInput, req.Style, true)
-		h.tm.StartTask(ctx, t)
-		c.JSON(202, gin.H{"task_id": t.ID})
-	} else {
-		t := h.tm.CreateTask(userInput, req.Style, false)
-		h.tm.StartTask(ctx, t)
-		c.JSON(202, gin.H{"task_id": t.ID})
-	}
 }
 
 func (h *Handler) GetTask(c *gin.Context) {
@@ -125,49 +93,6 @@ func (h *Handler) GetTask(c *gin.Context) {
 		"output":  t.Output,
 		"error":   t.Error,
 	})
-}
-
-func (h *Handler) StreamTask(c *gin.Context) {
-	taskID := c.Param("task_id")
-	t, ok := h.tm.GetTask(taskID)
-	if !ok {
-		c.JSON(404, gin.H{"error": "task not found"})
-		return
-	}
-	c.Header("Content-Type", "text/event-stream")
-	c.Header("Cache-Control", "no-cache")
-	c.Header("Connection", "keep-alive")
-	c.Stream(func(w io.Writer) bool {
-		select {
-		case event, ok := <-t.EventCh:
-			if !ok {
-				return false
-			}
-			if event.Err != nil {
-				data, _ := json.Marshal(gin.H{"type": "error", "message": event.Err.Error()})
-				fmt.Fprintf(w, "event: error\ndata: %s\n\n", data)
-				return false
-			}
-			if event.Output != nil && event.Output.MessageOutput != nil {
-				msg, err := event.Output.MessageOutput.GetMessage()
-				if err == nil && msg.Content != "" {
-					data, _ := json.Marshal(gin.H{
-						"type":    "output",
-						"agent":   event.AgentName,
-						"content": msg.Content,
-					})
-					fmt.Fprintf(w, "event: message\ndata: %s\n\n", data)
-				}
-			}
-			return true
-		case <-c.Request.Context().Done():
-			return false
-		}
-	})
-	if t.Status == "completed" || t.Status == "failed" {
-		data, _ := json.Marshal(gin.H{"type": "done", "status": t.Status, "files": t.Output})
-		fmt.Fprintf(c.Writer, "event: done\ndata: %s\n\n", data)
-	}
 }
 
 func (h *Handler) DownloadAudio(c *gin.Context) {
