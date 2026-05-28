@@ -473,7 +473,7 @@ func (h *Handler) UploadFile(c *gin.Context) {
 
 	kbCtx := context.Background()
 	if existingUUID, _ := h.kb.ResolveBookName(kbCtx, userID, bookName); existingUUID != "" {
-		c.JSON(409, gin.H{"error": fmt.Sprintf("书籍「%s」已存在，请删除后重新上传", bookName)})
+		c.JSON(409, gin.H{"error": fmt.Sprintf("书籍「%s」refID：%s 已存在，请删除后重新上传", bookName, existingUUID)})
 		os.Remove(hashPath)
 		h.kb.UpdateBookNameRefFilePath(kbCtx, userID, bookName, hashPath)
 		return
@@ -522,7 +522,7 @@ func (h *Handler) DeleteFile(c *gin.Context) {
 	ctx := context.Background()
 	ref, err := h.kb.ResolveBookRef(ctx, refID)
 	if err != nil {
-		c.JSON(500, gin.H{"error": "err"})
+		c.JSON(500, gin.H{"error": err})
 		return
 	}
 	if ref == nil {
@@ -534,8 +534,13 @@ func (h *Handler) DeleteFile(c *gin.Context) {
 		return
 	}
 
+	log.Printf("http endpoint: delete file, userID:%s, fileName:%s, refID:%s, filePath:%s",
+		userID, ref.BookName, refID, ref.FilePath)
 	// 删文件
-	os.Remove(ref.FilePath)
+	err = os.Remove(ref.FilePath)
+	if err != nil {
+		log.Printf("[HTTP ERROR]--%v", err)
+	}
 	// 删 Redis 索引
 	h.kb.DeleteBook(context.Background(), refID, ref)
 	// 删内存记录

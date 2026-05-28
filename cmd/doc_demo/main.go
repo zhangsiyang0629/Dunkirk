@@ -2,10 +2,12 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"dunkirk/internal/config"
 	"dunkirk/internal/docproc"
 	"dunkirk/internal/kb"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"path/filepath"
@@ -22,6 +24,13 @@ func main() {
 	query := os.Args[2]
 	ctx := context.Background()
 	cfg := config.Load()
+
+	file, err := os.Open(filePath)
+	if err != nil {
+		log.Fatalf("open file err: %v", err)
+	}
+	defer file.Close()
+
 	knowledgeBase, err := kb.New(ctx, cfg)
 	if err != nil {
 		log.Fatalf("init kb: %v", err)
@@ -47,6 +56,17 @@ func main() {
 	}
 
 	if !duplicated {
+		hasher := sha256.New()
+		ext := filepath.Ext(filePath)
+		tmpFile := filepath.Join(cfg.UploadDir, uuid.New().String()+ext)
+		os.MkdirAll(cfg.UploadDir, 0755)
+		out, _ := os.Create(tmpFile)
+		tee := io.TeeReader(file, hasher)
+		io.Copy(out, tee)
+		out.Close()
+		hash := fmt.Sprintf("%x", hasher.Sum(nil))
+		hashPath := filepath.Join(cfg.UploadDir, hash+ext)
+		os.Rename(tmpFile, hashPath)
 		fmt.Println("\n开始解析文件并向量化")
 		chapters, err := docproc.ProcessAndStore(ctx, knowledgeBase, bookName, filePath, refID, "anonymous", "private")
 		if err != nil {
