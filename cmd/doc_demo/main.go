@@ -15,10 +15,11 @@ import (
 )
 
 func main() {
-	if len(os.Args) < 2 {
-		log.Fatal("usage: go run cmd/doc_demo/main.go <file_path>")
+	if len(os.Args) < 3 {
+		log.Fatal("usage: go run cmd/doc_demo/main.go <file_path> <query>")
 	}
 	filePath := os.Args[1]
+	query := os.Args[2]
 	ctx := context.Background()
 	cfg := config.Load()
 	knowledgeBase, err := kb.New(ctx, cfg)
@@ -30,35 +31,43 @@ func main() {
 	base := filepath.Base(filePath)
 	ext := filepath.Ext(base)
 	bookName := strings.TrimSuffix(base, ext)
+
+	duplicated := false
+	refID := uuid.New().String()[:8]
 	if existingUUID, _ := knowledgeBase.ResolveBookName(ctx, "anonymous", bookName); existingUUID != "" {
 		fmt.Printf("Book '%s' already exists with UUID: %s, skipping processing.",
 			bookName, existingUUID)
+		duplicated = true
+		refID = existingUUID
+	}
+
+	if err := knowledgeBase.SaveBookNameRef(ctx, "anonymous", "public", bookName, refID); err != nil {
+		log.Fatalf("save book name ref: %v", err)
 		return
 	}
 
-	refID := uuid.New().String()[:8]
-	if err := knowledgeBase.SaveBookNameRef(ctx, "anonymous", bookName, "public", refID); err != nil {
-		log.Fatalf("save book name ref: %v", err)
+	if !duplicated {
+		fmt.Println("\n开始解析文件并向量化")
+		chapters, err := docproc.ProcessAndStore(ctx, knowledgeBase, bookName, filePath, refID, "anonymous", "private")
+		if err != nil {
+			log.Fatalf("process: %v", err)
+		}
+		fmt.Printf("共拆出 %d 章：\n", len(chapters))
+		for _, ch := range chapters[:3] {
+			fmt.Printf("  %s (%d 字)\n", ch.Title, ch.ContentLen)
+		}
+		if len(chapters) > 3 {
+			fmt.Printf("  ... 共 %d 章\n", len(chapters))
+		}
 	}
 
-	chapters, err := docproc.ProcessAndStore(ctx, knowledgeBase, filePath, refID, bookName, "anonymous", "private")
-	if err != nil {
-		log.Fatalf("process: %v", err)
-	}
-	fmt.Printf("共拆出 %d 章：\n", len(chapters))
-	for _, ch := range chapters[:3] {
-		fmt.Printf("  %s (%d 字)\n", ch.Title, ch.ContentLen)
-	}
-	if len(chapters) > 3 {
-		fmt.Printf("  ... 共 %d 章\n", len(chapters))
-	}
 	fmt.Println("\n搜索测试：")
-	docs, err := knowledgeBase.Search(ctx, "曹操", 3, "anonymous", "")
+	docs, err := knowledgeBase.Search(ctx, query, 3, "anonymous", refID)
 	if err != nil {
 		log.Fatalf("search: %v", err)
 	}
 	for _, d := range docs {
 		title, _ := d.MetaData["title"].(string)
-		fmt.Printf("  找到: %s\n", title)
+		fmt.Printf("  找到: %s，内容: %s\n", title, d.Content)
 	}
 }

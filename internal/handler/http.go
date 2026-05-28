@@ -479,7 +479,7 @@ func (h *Handler) UploadFile(c *gin.Context) {
 		return
 	}
 
-	h.kb.SaveBookNameRef(kbCtx, userID, bookName, visibility, refID)
+	h.kb.SaveBookNameRef(kbCtx, userID, visibility, bookName, refID)
 	h.fileStatus.Add(&FileInfo{
 		RefID:      refID,
 		FilePath:   hashPath,
@@ -537,7 +537,7 @@ func (h *Handler) DeleteFile(c *gin.Context) {
 	// 删文件
 	os.Remove(ref.FilePath)
 	// 删 Redis 索引
-	h.kb.DeleteBook(context.Background(), ref)
+	h.kb.DeleteBook(context.Background(), refID, ref)
 	// 删内存记录
 	h.fileStatus.Remove(refID)
 	c.JSON(200, gin.H{"status": "deleted"})

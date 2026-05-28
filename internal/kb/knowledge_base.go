@@ -66,9 +66,11 @@ func New(ctx context.Context, cfg *config.Config) (*KnowledgeBase, error) {
 		return nil, fmt.Errorf("redis ping error: %w", err)
 	}
 
+	apiType := ark.APITypeMultiModal
 	emb, err := ark.NewEmbedder(ctx, &ark.EmbeddingConfig{
-		APIKey: cfg.ArkAPIKey,
-		Model:  cfg.ArkEmbeddingModel,
+		APIKey:  cfg.ArkAPIKey,
+		Model:   cfg.ArkEmbeddingModel,
+		APIType: &apiType,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("new embedder error: %w", err)
@@ -204,6 +206,7 @@ func (kb *KnowledgeBase) Search(
 		if bookRef != "" {
 			pubFilter = fmt.Sprintf("@book_ref:{%s}", bookRef)
 		}
+		fmt.Println(pubFilter)
 		pubDocs, _ := kb.retrieverPublic.Retrieve(ctx, query,
 			retriever.WithTopK(topK), redisRetriever.WithFilterQuery(pubFilter))
 		docs = append(docs, pubDocs...)
@@ -338,7 +341,7 @@ func (kb *KnowledgeBase) ResolveBookName(ctx context.Context, userID, bookName s
 	if err != nil {
 		return "", fmt.Errorf("HGetAll failed: %w", err)
 	}
-	return fields["ref_id"], nil
+	return fields["refID"], nil
 }
 
 func escapeText(s string) string {
