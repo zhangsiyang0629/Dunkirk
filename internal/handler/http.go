@@ -18,6 +18,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/compose"
@@ -48,8 +49,22 @@ func New(tm *task.Manager,
 	return &Handler{tm: tm, kb: kb, tts: ttsClient, cfg: cfg, cm: cm, fileStatus: fs}
 }
 
+func LoggerMiddleware(c *gin.Context) {
+	start := time.Now()
+	userID := c.GetHeader("X-User-ID")
+	c.Next()
+	log.Printf("[HTTP] %s %s %d %s user=%s",
+		c.Request.Method,
+		c.Request.URL.Path,
+		c.Writer.Status(),
+		time.Since(start),
+		userID,
+	)
+}
+
 func Register(r *gin.Engine, h *Handler) {
 	v1 := r.Group("/api/v1")
+	r.Use(LoggerMiddleware)
 	{
 		v1.POST("/audio/generate", h.Generate)
 		v1.POST("/chat", h.Chat)
@@ -517,6 +532,13 @@ func (h *Handler) DeleteFile(c *gin.Context) {
 	if userID == "" {
 		c.JSON(403, gin.H{"error": "user id required"})
 		return
+	}
+
+	if info, ok := h.fileStatus.Get(refID); ok {
+		if info.Status == "processing" {
+			c.JSON(403, gin.H{"error": fmt.Sprintf("file:%s is processing, can't delete file", refID)})
+			return
+		}
 	}
 
 	ctx := context.Background()
