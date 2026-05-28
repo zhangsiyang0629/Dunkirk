@@ -5,6 +5,7 @@ import (
 	"dunkirk/internal/agent"
 	"dunkirk/internal/pipeline"
 	"fmt"
+	"log"
 	"strings"
 	"sync"
 	"time"
@@ -21,12 +22,19 @@ type Task struct {
 	Input        string
 	Style        string
 	PipelineMode bool
-	FilePath     string
+	FileRefID    string
+	BookName     string
 	Output       []string
 	Error        string
 	EventCh      chan *adk.AgentEvent
 	done         chan struct{}
 	Intent       *pipeline.IntentResult
+	UserID       string
+}
+
+func (t *Task) NextEvent() (*adk.AgentEvent, bool) {
+	event, ok := <-t.EventCh
+	return event, ok
 }
 
 type Manager struct {
@@ -73,6 +81,7 @@ func (m *Manager) StartTask(task *Task) {
 	go func() {
 		defer close(task.done)
 		ctx := context.Background()
+		log.Printf("[start task]pipelineMode:%v", task.PipelineMode)
 		if task.PipelineMode {
 			m.runPipeline(ctx, task)
 			return
@@ -111,10 +120,18 @@ func (m *Manager) Subscribe(id string) *Task {
 }
 
 func (m *Manager) runPipeline(ctx context.Context, task *Task) {
-	results, err := pipeline.ProcessBook(ctx, m.pipeline, task.FilePath, task.Style)
+	results, err := pipeline.ProcessBook(
+		ctx,
+		m.pipeline,
+		task.UserID,
+		task.FileRefID,
+		task.BookName,
+		task.Style,
+		task.Intent.Chapters)
 	if err != nil {
 		task.Error = err.Error()
 		task.Status = "failed"
+		log.Printf("[pipeline error] %v", err)
 		return
 	}
 	for _, ch := range results {
@@ -133,14 +150,21 @@ func (m *Manager) runPipeline(ctx context.Context, task *Task) {
 	// close(task.done)
 }
 
-func (m *Manager) CreateTaskFromIntent(intent *pipeline.IntentResult, filePath string, pipelineMode bool) *Task {
+func (m *Manager) CreateTaskFromIntent(
+	input string,
+	intent *pipeline.IntentResult,
+	userID, refID, bookName string,
+	pipelineMode bool) *Task {
 	task := &Task{
 		ID:           uuid.New().String()[:8],
 		Status:       "pending",
 		CreatedAt:    time.Now(),
+		UserID:       userID,
+		Input:        input,
 		Style:        intent.Style,
 		PipelineMode: pipelineMode,
-		FilePath:     filePath,
+		FileRefID:    refID,
+		BookName:     bookName,
 		Intent:       intent,
 		EventCh:      make(chan *adk.AgentEvent, 100),
 		done:         make(chan struct{}),

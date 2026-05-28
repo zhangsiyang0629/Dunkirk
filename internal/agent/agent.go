@@ -56,13 +56,11 @@ func NewWithChatMode(ctx context.Context,
 		Handlers:    []adk.ChatModelAgentMiddleware{summMW},
 		Instruction: `你是{Style}。
 工作流程：
-1. 如果用户提供了文件路径，先调用 read_and_index_document 加载并处理
-2. 拿到章节列表后，逐章处理：
-   a. 调用 search_knowledge_base 了解章节概要
-   b. 再调用 generate_script 生成音频脚本（工具内部会自动获取完整原文）
-   c. 最后调用 text_to_speech 转为音频文件
-3. 如果用户只提供话题，先调用 search_knowledge_base 了解相关章节，再调用 generate_script 生成脚本
-4. 每完成一章向用户报告进度
+工作流程：
+1. 如果用户指定了话题，先调用 search_knowledge_base 了解相关内容
+2. 再调用 generate_script 基于搜索到的内容生成音频脚本
+3. 最后调用 text_to_speech 转为音频文件
+4. 每完成一步向用户报告进度
 5. 如果用户明确说了时长，严格按指定时长控制
 6. 如果用户没提时长，generate_script 的 duration_min 参数传 0，工具会自动估算
 7. **重要：所有数字、人名、地名、数量必须严格与原文一致，不得修改**

@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"context"
+	"dunkirk/internal/kb"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -12,8 +13,33 @@ import (
 	"github.com/cloudwego/eino/schema"
 )
 
+func init() {
+	schema.Register[IntentResult]()
+}
+
+type inMemoryStore struct {
+	m map[string][]byte
+}
+
+func newInMemoryStore() *inMemoryStore {
+	return &inMemoryStore{
+		m: make(map[string][]byte),
+	}
+}
+
+func (i *inMemoryStore) Get(_ context.Context, checkPointID string) ([]byte, bool, error) {
+	v, ok := i.m[checkPointID]
+	return v, ok, nil
+}
+
+func (i *inMemoryStore) Set(_ context.Context, checkPointID string, checkPoint []byte) error {
+	i.m[checkPointID] = checkPoint
+	return nil
+}
+
 func NewIntentParser(ctx context.Context,
-	cm model.BaseChatModel) (compose.Runnable[string, *IntentResult], error) {
+	cm model.BaseChatModel,
+	kb *kb.KnowledgeBase) (compose.Runnable[string, *IntentResult], error) {
 	sys := `你是音频制作助手的意图识别器和助手，当用户闲聊时友好回应，并引导到音频制作话题。
 
 【场景一：用户闲聊】
@@ -26,9 +52,11 @@ func NewIntentParser(ctx context.Context,
     "topic": "用户指定的话题或章节标题",
     "style": "用户指定的风格要求，未指定则空字符串",
     "duration_min": 用户指定的时长，未指定则为0,
+	"book": "用户提到的书籍名称",
     "mode": "chat"/"chapter"/"book",
     "is_audio_request": true/false,
-    "reasoning": "简要推断说明"
+    "reasoning": "简要推断说明",
+	"chapters": 章节数组，如[1,2,3,4,5]或[1,3]，全本则不填或null
 }}
 
 规则：
@@ -36,7 +64,14 @@ func NewIntentParser(ctx context.Context,
 - "mode":"chapter" → 用户指定了具体话题或章节
 - 用户说"生成音频"、"做成音频"等，但没有上传文件，也没有指定主题 → 则为闲聊，需引导用户生成什么样的音频
 - 用户说"生成音频"、"做成音频"等，且上传文件或指定主题 → is_audio_request=true
-- 用户既上传文件又指定话题 → mode="chapter"`
+- 用户既上传文件又指定话题 → mode="chapter"
+- 用户说"第1到5回" → chapters: [1,2,3,4,5]
+- 用户说"第一章和第三章" → chapters: [1,3]
+- 用户说"全本"或没提章节 → 不填 chapters
+- 用户明确说了书名，例如"三国演义" → book="三国演义"
+- 用户的书名说得不明确，例如"三国" → book="三国"，不要自行推断完整书名
+- 书名推断由后续系统逻辑处理，意图解析只需输出用户原文
+- 用户没提到书 → book=""`
 
 	userTmpl := prompt.FromMessages(schema.FString,
 		schema.SystemMessage(sys),
@@ -53,21 +88,10 @@ func NewIntentParser(ctx context.Context,
 		AppendChatModel(cm, compose.WithNodeName("intent_model")).
 		AppendLambda(compose.InvokableLambda(
 			func(ctx context.Context, msg *schema.Message) (*IntentResult, error) {
-				content := strings.TrimSpace(msg.Content)
-				if strings.HasPrefix(content, "{") {
-					result, err := parseIntentResponse(content)
-					if err != nil {
-						return nil, err
-					}
-					return result, nil
-				}
-				return &IntentResult{
-					IsAudioRequest: false,
-					ChatReply:      content,
-				}, nil
+				return lambdaParseIntentResponse(ctx, msg, kb)
 			}), compose.WithNodeName("intent_parser_response"))
 
-	r, err := chain.Compile(ctx)
+	r, err := chain.Compile(ctx, compose.WithCheckPointStore(newInMemoryStore()))
 	if err != nil {
 		return nil, fmt.Errorf("compile intent parser: %w", err)
 	}
@@ -85,4 +109,60 @@ func parseIntentResponse(content string) (*IntentResult, error) {
 		return nil, fmt.Errorf("parse intent: %w", err)
 	}
 	return &result, nil
+}
+
+func lambdaParseIntentResponse(
+	ctx context.Context,
+	msg *schema.Message,
+	kb *kb.KnowledgeBase) (*IntentResult, error) {
+	wasInterrupted, hasState, state := compose.GetInterruptState[IntentResult](ctx)
+	lastRes := state
+	if !wasInterrupted {
+		content := strings.TrimSpace(msg.Content)
+		if !strings.HasPrefix(content, "{") {
+			return &IntentResult{IsAudioRequest: false, ChatReply: content}, nil
+		}
+		result, err := parseIntentResponse(content)
+		if err != nil {
+			return nil, err
+		}
+		if !result.IsAudioRequest {
+			return result, nil
+		}
+		if result.Book == "" {
+			return result, nil
+		}
+
+		userID, _ := ctx.Value("userID").(string)
+		books, findErr := kb.FindBooks(ctx, userID, result.Book)
+		if findErr != nil {
+			return nil, findErr
+		}
+		if len(books) > 1 {
+			info := map[string]any{
+				"question": "您指的是哪本书？",
+				"options":  books,
+			}
+			result.InterruptOpions = books
+			return nil, compose.StatefulInterrupt(ctx, info, *result)
+		}
+		if len(books) == 1 {
+			result.Book = books[0]
+		}
+		return result, nil
+	}
+	isTarget, hasData, data := compose.GetResumeContext[string](ctx)
+	if isTarget && hasData {
+		lastRes.Book = data
+		return &lastRes, nil
+	}
+	// 不是目标中断点 → 用保存的状态重新中断
+	var books []string
+	if hasState {
+		books = lastRes.InterruptOpions
+	}
+	return nil, compose.StatefulInterrupt(ctx, map[string]any{
+		"question": "您指的是哪本书？",
+		"options":  books,
+	}, lastRes)
 }

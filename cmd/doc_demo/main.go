@@ -8,6 +8,10 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
+	"strings"
+
+	"github.com/google/uuid"
 )
 
 func main() {
@@ -22,19 +26,34 @@ func main() {
 		log.Fatalf("init kb: %v", err)
 	}
 	defer knowledgeBase.Close()
-	chapters, err := docproc.ProcessAndStore(ctx, knowledgeBase, filePath)
+
+	base := filepath.Base(filePath)
+	ext := filepath.Ext(base)
+	bookName := strings.TrimSuffix(base, ext)
+	if existingUUID, _ := knowledgeBase.ResolveBookName(ctx, "anonymous", bookName); existingUUID != "" {
+		fmt.Printf("Book '%s' already exists with UUID: %s, skipping processing.",
+			bookName, existingUUID)
+		return
+	}
+
+	refID := uuid.New().String()[:8]
+	if err := knowledgeBase.SaveBookNameRef(ctx, "anonymous", bookName, "public", refID); err != nil {
+		log.Fatalf("save book name ref: %v", err)
+	}
+
+	chapters, err := docproc.ProcessAndStore(ctx, knowledgeBase, filePath, refID, bookName, "anonymous", "private")
 	if err != nil {
 		log.Fatalf("process: %v", err)
 	}
 	fmt.Printf("共拆出 %d 章：\n", len(chapters))
 	for _, ch := range chapters[:3] {
-		fmt.Printf("  %s (%d 字)\n", ch.Title, len([]rune(ch.Content)))
+		fmt.Printf("  %s (%d 字)\n", ch.Title, ch.ContentLen)
 	}
 	if len(chapters) > 3 {
 		fmt.Printf("  ... 共 %d 章\n", len(chapters))
 	}
 	fmt.Println("\n搜索测试：")
-	docs, err := knowledgeBase.Search(ctx, "曹操", 3)
+	docs, err := knowledgeBase.Search(ctx, "曹操", 3, "anonymous", "")
 	if err != nil {
 		log.Fatalf("search: %v", err)
 	}

@@ -2,7 +2,6 @@ package agent
 
 import (
 	"context"
-	"dunkirk/internal/docproc"
 	"dunkirk/internal/kb"
 	"dunkirk/internal/tts"
 	"encoding/json"
@@ -37,52 +36,14 @@ type TTSInput struct {
 	Filename string `json:"filename" jsonschema_description:"输出文件名(不含扩展名)"`
 }
 
-// func cleanContent(s string) string {
-// 	return strings.Map(func(r rune) rune {
-// 		if r >= 0x4e00 && r <= 0x9fff {
-// 			return r
-// 		}
-// 		if r >= 'a' && r <= 'z' {
-// 			return r
-// 		}
-// 		if r >= 'A' && r <= 'Z' {
-// 			return r
-// 		}
-// 		if r >= '0' && r <= '9' {
-// 			return r
-// 		}
-// 		if strings.ContainsRune("，。、！？：；\"\"''（）《》【】\n\r\t ", r) {
-// 			return r
-// 		}
-// 		return -1
-// 	}, s)
-// }
-
 func newTools(kb *kb.KnowledgeBase, cm *ark.ChatModel, tc *tts.Client) []tool.BaseTool {
-	readDoc, _ := utils.InferTool("read_and_index_document", "加载并解析文件，按章节拆分并存入知识库。返回章节列表。",
-		func(ctx context.Context, input *ReadDocInput) (string, error) {
-			chapters, err := docproc.ProcessAndStore(ctx, kb, input.FilePath)
-			if err != nil {
-				return "", err
-			}
-			type chInfo struct {
-				Index int    `json:"index"`
-				Title string `json:"title"`
-			}
-			var list []chInfo
-			for _, ch := range chapters {
-				list = append(list, chInfo{Index: ch.Index, Title: ch.Title})
-			}
-			b, _ := json.Marshal(list)
-			return string(b), nil
-		})
-
 	search, _ := utils.InferTool("search_knowledge_base", "搜索知识库中相关的章节，返回章节标题列表。",
 		func(ctx context.Context, input *SearchInput) (string, error) {
 			if input.TopK <= 0 {
 				input.TopK = 3
 			}
-			docs, err := kb.Search(ctx, input.Query, input.TopK)
+			userID, _ := ctx.Value("userID").(string)
+			docs, err := kb.Search(ctx, input.Query, input.TopK, userID, "")
 			if err != nil {
 				return "", err
 			}
@@ -114,7 +75,8 @@ func newTools(kb *kb.KnowledgeBase, cm *ark.ChatModel, tc *tts.Client) []tool.Ba
 				return string(r[:n]) + "..."
 			}
 
-			relatedDocs, _ := kb.Search(ctx, input.Query, 2)
+			userID, _ := ctx.Value("userID").(string)
+			relatedDocs, _ := kb.Search(ctx, input.Query, 2, userID, "")
 			contextMsg := input.Topic
 			if len(relatedDocs) > 0 {
 				var parts []string
@@ -162,7 +124,7 @@ func newTools(kb *kb.KnowledgeBase, cm *ark.ChatModel, tc *tts.Client) []tool.Ba
 			}
 			return path, nil
 		})
-	return []tool.BaseTool{readDoc, search, genScript, ttsTool}
+	return []tool.BaseTool{search, genScript, ttsTool}
 }
 
 func estimateDuration(contentLen int, style string) int {

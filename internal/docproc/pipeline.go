@@ -2,41 +2,31 @@ package docproc
 
 import (
 	"context"
-	"crypto/sha256"
 	"dunkirk/internal/kb"
-	"encoding/json"
 	"fmt"
-	"log"
-	"os"
 
 	"github.com/cloudwego/eino/schema"
 	"github.com/google/uuid"
 )
 
-func ProcessAndStore(ctx context.Context, knowledgeBase *kb.KnowledgeBase, filePath string) ([]Chapter, error) {
-	// 计算文件哈希
-	data, err := os.ReadFile(filePath)
-	if err != nil {
-		return nil, fmt.Errorf("read file: %w", err)
-	}
-	hash := fmt.Sprintf("%x", sha256.Sum256(data))
-	// 检测是否已处理过
-	exists, err := knowledgeBase.HasFile(ctx, hash)
+func GetBriefChapters(ctx context.Context, knowledgeBase *kb.KnowledgeBase, refID string) ([]kb.BriefChapter, error) {
+	ref, err := knowledgeBase.ResolveBookRef(ctx, refID)
 	if err != nil {
 		return nil, err
 	}
-	if exists {
-		raw, err := knowledgeBase.LoadFileIndexRaw(ctx, hash)
-		if err != nil {
-			return nil, err
-		}
-		var chapters []Chapter
-		if err := json.Unmarshal(raw, &chapters); err != nil {
-			return nil, err
-		}
-		log.Printf("file already processed, cached chapters: %d", len(chapters))
-		return chapters, nil
+	if ref != nil {
+		return ref.BriefChapters, nil
 	}
+	return []kb.BriefChapter{}, nil
+}
+
+/*
+是否重复向量化应该在该函数调用之前判定
+*/
+func ProcessAndStore(
+	ctx context.Context,
+	knowledgeBase *kb.KnowledgeBase,
+	bookName, filePath, refID, userID, visibility string) ([]kb.BriefChapter, error) {
 
 	doc, err := LoadDocument(ctx, filePath)
 	if err != nil {
@@ -59,23 +49,28 @@ func ProcessAndStore(ctx context.Context, knowledgeBase *kb.KnowledgeBase, fileP
 					"segment_index":  seg.Index,
 					"total_segments": len(segs),
 					"source":         filePath,
+					"book_ref":       refID,
+					"user_id":        userID,
+					"visibility":     visibility,
 				},
 			})
 		}
 	}
-	ids, err := knowledgeBase.StoreDocuments(ctx, docs)
+	ids, err := knowledgeBase.StoreDocuments(ctx, docs, visibility)
 	if err != nil {
 		return nil, fmt.Errorf("store: %w", err)
 	}
+	briefChapers := make([]kb.BriefChapter, len(chapters))
 	for i := range chapters {
 		chapters[i].Index = i + 1
+		briefChapers[i] = kb.NewBriefChapter(chapters[i].Title,
+			chapters[i].Index, len(chapters[i].Content))
 	}
 	_ = ids
 
-	chaptersJSON, _ := json.Marshal(chapters)
-	if err := knowledgeBase.SaveFileIndex(ctx, hash, chaptersJSON); err != nil {
+	if err := knowledgeBase.SaveBookRef(ctx, bookName, refID,
+		userID, visibility, briefChapers); err != nil {
 		return nil, fmt.Errorf("save file index: %w", err)
 	}
-
-	return chapters, nil
+	return briefChapers, nil
 }

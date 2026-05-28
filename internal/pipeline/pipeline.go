@@ -33,7 +33,8 @@ func New(ctx context.Context,
 	scriptRunnable := newScriptChain(ctx, chatModel)
 	searchNode := compose.InvokableLambda(
 		func(ctx context.Context, task *ChapterTask) (*ChapterTask, error) {
-			docs, err := knowledgeBase.Search(ctx, task.Topic, 2)
+			userID, _ := ctx.Value("userID").(string)
+			docs, err := knowledgeBase.Search(ctx, task.Topic, 5, userID, task.FileRefID)
 			if err != nil {
 				return nil, err
 			}
@@ -101,19 +102,34 @@ func (p *Pipeline) ProcessChapter(ctx context.Context, task *ChapterTask) (*Chap
 	return p.runnable.Invoke(ctx, task)
 }
 
-func ProcessBook(ctx context.Context, p *Pipeline, filePath, style string) ([]*ChapterTask, error) {
-	chapters, err := docproc.ProcessAndStore(ctx, p.kb, filePath)
+func ProcessBook(ctx context.Context,
+	p *Pipeline,
+	userID, fileRefID, bookName, style string,
+	chapters []int) ([]*ChapterTask, error) {
+	allChapters, err := docproc.GetBriefChapters(ctx, p.kb, fileRefID)
 	if err != nil {
 		return nil, fmt.Errorf("process: %w", err)
 	}
+	var targets []kb.BriefChapter
+	if len(chapters) == 0 {
+		targets = allChapters
+	} else {
+		for _, idx := range chapters {
+			if idx > 0 && idx <= len(allChapters) {
+				targets = append(targets, allChapters[idx-1])
+			}
+		}
+	}
+	log.Printf("total chapters: %d, target chapters: %v %v", len(allChapters), chapters, targets)
 
 	var results []*ChapterTask
-	for i, ch := range chapters {
+	for i, ch := range targets {
 		task := &ChapterTask{
 			Topic:         ch.Title,
 			Style:         style,
 			DurationMin:   0,
 			ChapterIdx:    i + 1,
+			FileRefID:     fileRefID,
 			TotalChapters: len(chapters),
 		}
 		result, err := p.ProcessChapter(ctx, task)
