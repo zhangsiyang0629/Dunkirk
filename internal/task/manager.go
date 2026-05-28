@@ -76,11 +76,10 @@ func (m *Manager) GetTask(id string) (*Task, bool) {
 	return t, ok
 }
 
-func (m *Manager) StartTask(task *Task) {
+func (m *Manager) StartTask(ctx context.Context, task *Task) {
 	task.Status = "running"
 	go func() {
 		defer close(task.done)
-		ctx := context.Background()
 		log.Printf("[start task]pipelineMode:%v", task.PipelineMode)
 		if task.PipelineMode {
 			m.runPipeline(ctx, task)
@@ -147,6 +146,8 @@ func (m *Manager) runPipeline(ctx context.Context, task *Task) {
 		}
 	}
 	task.Status = "completed"
+	log.Printf("task %s done, userID: %s, fileRefID: %s, topic: %s",
+		task.ID, task.UserID, task.FileRefID, task.Intent.Topic)
 	// close(task.done)
 }
 

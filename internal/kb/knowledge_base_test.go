@@ -17,7 +17,7 @@ func TestSearch(t *testing.T) {
 		t.Fatalf("init kb: %v", err)
 	}
 	defer knowledgeBase.Close()
-	relatedDocs, err := knowledgeBase.Search(ctx, "草船借箭", 2, "anonymous", "")
+	relatedDocs, err := knowledgeBase.Search(ctx, "草船借箭", 2, "anonymous", "72563291")
 	if err != nil {
 		t.Fatal(err)
 	}

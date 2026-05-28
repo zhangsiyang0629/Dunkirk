@@ -5,6 +5,7 @@ import (
 	"dunkirk/internal/config"
 	"encoding/json"
 	"fmt"
+	"log"
 	"strings"
 
 	"github.com/cloudwego/eino-ext/components/embedding/ark"
@@ -199,17 +200,23 @@ func (kb *KnowledgeBase) Search(
 	if bookRef != "" {
 		privFilter += fmt.Sprintf(" @book_ref:{%s}", bookRef)
 	}
-	docs, _ := kb.retrieverPrivate.Retrieve(ctx, query,
+	docs, err := kb.retrieverPrivate.Retrieve(ctx, query,
 		retriever.WithTopK(topK), redisRetriever.WithFilterQuery(privFilter))
+	if err != nil {
+		log.Printf("retrieve private err: %v, query: %s, filter: %s", err, query, privFilter)
+	}
 	if len(docs) == 0 {
 		var pubFilter string
 		if bookRef != "" {
 			pubFilter = fmt.Sprintf("@book_ref:{%s}", bookRef)
 		}
-		fmt.Println(pubFilter)
-		pubDocs, _ := kb.retrieverPublic.Retrieve(ctx, query,
+		pubDocs, err := kb.retrieverPublic.Retrieve(ctx, query,
 			retriever.WithTopK(topK), redisRetriever.WithFilterQuery(pubFilter))
-		docs = append(docs, pubDocs...)
+		if err != nil {
+			log.Printf("retrieve public err: %v, query: %s, filter: %s", err, query, pubFilter)
+		} else {
+			docs = append(docs, pubDocs...)
+		}
 	}
 	return docs, nil
 }
@@ -293,10 +300,9 @@ func (kb *KnowledgeBase) FindBooks(ctx context.Context,
 			userID, escapeText(query))
 	}
 
-	fmt.Println(query)
 	res, err := kb.redisClient.FTSearch(ctx, bookNameRefIndex, query).Result()
 	if err != nil {
-		return nil, fmt.Errorf("search failed: %w", err)
+		return nil, fmt.Errorf("search failed: %w, query: %s", err, query)
 	}
 	if res.Total == 0 {
 		return []string{}, nil

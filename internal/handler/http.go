@@ -96,17 +96,18 @@ func (h *Handler) Generate(c *gin.Context) {
 		return
 	}
 
+	ctx := context.Background()
 	userInput := fmt.Sprintf("用户话题：%s\n风格要求：%s", req.Topic, req.Style)
 	if req.FilePath != "" {
 		userInput = fmt.Sprintf("用户上传文件：%s\n%s", req.FilePath, userInput)
 	}
 	if req.FilePath != "" && req.Topic == "" {
 		t := h.tm.CreateTask(userInput, req.Style, true)
-		h.tm.StartTask(t)
+		h.tm.StartTask(ctx, t)
 		c.JSON(202, gin.H{"task_id": t.ID})
 	} else {
 		t := h.tm.CreateTask(userInput, req.Style, false)
-		h.tm.StartTask(t)
+		h.tm.StartTask(ctx, t)
 		c.JSON(202, gin.H{"task_id": t.ID})
 	}
 }
@@ -206,12 +207,14 @@ func (h *Handler) Chat(c *gin.Context) {
 		}
 	}
 
-	ctx := context.WithValue(c.Request.Context(), "user_id", userID)
+	ctx := context.WithValue(c.Request.Context(), "userID", userID)
 	ctx = context.WithValue(ctx, "file_ref_id", fileRefID)
 	ctx = context.WithValue(ctx, "file_status", h.fileStatus)
 	if fileRefID != "" {
 		ctx = context.WithValue(ctx, "book_ref", fileRefID)
 	}
+	nr := c.Request.WithContext(ctx)
+	c.Request = nr
 
 	sessionID := uuid.New().String()
 	result, err := h.intentParser.Invoke(ctx, input, compose.WithCheckPointID(sessionID))
@@ -245,6 +248,10 @@ func (h *Handler) Chat(c *gin.Context) {
 		h.chatSSE(c, message, history, userID, result)
 		return
 	}
+	if fileRefID == "" && result.Book == "" {
+		h.chatSSE(c, message, history, userID, result)
+		return
+	}
 	h.audioSSE(c, result, fileRefID, userID)
 }
 
@@ -267,7 +274,7 @@ func (h *Handler) chatSSE(c *gin.Context,
 	}
 	msgs = append(msgs, history...)
 	msgs = append(msgs, schema.UserMessage(message))
-	ctx := context.WithValue(c.Request.Context(), "user_id", userID)
+	ctx := context.WithValue(c.Request.Context(), "userID", userID)
 	stream, err := h.cm.Stream(ctx, msgs)
 	if err != nil {
 		fmt.Fprintf(c.Writer, "event: error\ndata: {\"message\":\"%s\"}\n\n", err.Error())
@@ -320,9 +327,9 @@ func (h *Handler) audioSSE(
 		}
 	}
 
+	ref := fileRefID
 	var input string
 	if fileRefID != "" || bookRef != "" {
-		ref := fileRefID
 		if ref == "" {
 			ref = bookRef
 		}
@@ -338,18 +345,18 @@ func (h *Handler) audioSSE(
 	_ = userID
 	var t *task.Task
 	if result.Mode == "book" {
-		t = h.tm.CreateTaskFromIntent("全本生成", result, userID, fileRefID, result.Book, true)
+		t = h.tm.CreateTaskFromIntent("全本生成", result, userID, ref, result.Book, true)
 	} else if result.Mode == "chapter" && len(result.Chapters) > 0 {
-		t = h.tm.CreateTaskFromIntent("部分章节生成", result, userID, fileRefID, result.Book, true)
+		t = h.tm.CreateTaskFromIntent("部分章节生成", result, userID, ref, result.Book, true)
 	} else {
 		userInput := fmt.Sprintf("用户话题：%s\n风格要求：%s", result.Topic, result.Style)
 		if filePath != "" {
 			userInput = fmt.Sprintf("用户上传文件：%s\n%s", filePath, userInput)
 		}
-		t = h.tm.CreateTaskFromIntent(userInput, result, userID, fileRefID, result.Book, false)
+		t = h.tm.CreateTaskFromIntent(userInput, result, userID, ref, result.Book, false)
 	}
 	log.Printf("[audio task craete] %#v", *t)
-	h.tm.StartTask(t)
+	h.tm.StartTask(c.Request.Context(), t)
 
 	data, _ := json.Marshal(gin.H{"task_id": t.ID})
 	fmt.Fprintf(c.Writer, "event: task_created\ndata: %s\n\n", data)
