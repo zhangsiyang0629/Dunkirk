@@ -80,6 +80,7 @@ func (m *Manager) StartTask(ctx context.Context, task *Task) {
 	task.Status = "running"
 	go func() {
 		defer close(task.done)
+		defer close(task.EventCh)
 		log.Printf("[start task]pipelineMode:%v", task.PipelineMode)
 		if task.PipelineMode {
 			m.runPipeline(ctx, task)
