@@ -69,6 +69,7 @@ func Register(r *gin.Engine, h *Handler) {
 		v1.POST("/chat", h.Chat)
 		v1.GET("/audio/:task_id", h.GetTask)
 		v1.POST("/upload", h.UploadFile)
+		v1.POST("/resume", h.Resume)
 		v1.DELETE("/upload/:file_ref_id", h.DeleteFile)
 	}
 	r.GET("/api/audio/:filename", h.DownloadAudio)
@@ -273,9 +274,9 @@ func (h *Handler) audioSSE(
 	}
 
 	var t *task.Task
-	if result.Mode == "book" {
+	if result.Mode == "book" && !result.SkipFile {
 		t = h.tm.CreateTaskFromIntent("全本生成", result, userID, ref, result.Book, true)
-	} else if result.Mode == "chapter" && len(result.Chapters) > 0 {
+	} else if result.Mode == "chapter" && len(result.Chapters) > 0 && !result.SkipFile {
 		t = h.tm.CreateTaskFromIntent("部分章节生成", result, userID, ref, result.Book, true)
 	} else {
 		userInput := fmt.Sprintf("用户话题：%s\n风格要求：%s", result.Topic, result.Style)

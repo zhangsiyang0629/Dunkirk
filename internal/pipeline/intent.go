@@ -111,6 +111,11 @@ func parseIntentResponse(content string) (*IntentResult, error) {
 	return &result, nil
 }
 
+const (
+	GENERATE_LLM = "依赖模型推理继续生成"
+	GIVEUP       = "放弃生成"
+)
+
 func lambdaParseIntentResponse(
 	ctx context.Context,
 	msg *schema.Message,
@@ -139,30 +144,39 @@ func lambdaParseIntentResponse(
 			return nil, findErr
 		}
 		if len(books) > 1 {
-			info := map[string]any{
-				"question": "您指的是哪本书？",
-				"options":  books,
-			}
+			result.InterruptType = INTERRUPT_BOOK_SELECT
 			result.InterruptOpions = books
+			info := result.interruptInfo()
+			return nil, compose.StatefulInterrupt(ctx, info, *result)
+		} else if len(books) == 1 {
+			result.Book = books[0]
+			return result, nil
+		} else {
+			result.InterruptType = INTERRUPT_GEN_SELECT
+			result.InterruptOpions = []string{GENERATE_LLM, GIVEUP}
+			info := result.interruptInfo()
 			return nil, compose.StatefulInterrupt(ctx, info, *result)
 		}
-		if len(books) == 1 {
-			result.Book = books[0]
-		}
-		return result, nil
 	}
+
 	isTarget, hasData, data := compose.GetResumeContext[string](ctx)
 	if isTarget && hasData {
-		lastRes.Book = data
-		return &lastRes, nil
+		switch data {
+		case GIVEUP:
+			return &IntentResult{IsAudioRequest: false, ChatReply: "已取消"}, nil
+		case GENERATE_LLM:
+			lastRes.SkipFile = true
+			lastRes.Book = ""
+			return &lastRes, nil
+		default:
+			lastRes.Book = data
+			return &lastRes, nil
+		}
 	}
+
 	// 不是目标中断点 → 用保存的状态重新中断
-	var books []string
 	if hasState {
-		books = lastRes.InterruptOpions
+		return nil, compose.StatefulInterrupt(ctx, lastRes.interruptInfo(), lastRes)
 	}
-	return nil, compose.StatefulInterrupt(ctx, map[string]any{
-		"question": "您指的是哪本书？",
-		"options":  books,
-	}, lastRes)
+	return &lastRes, nil
 }

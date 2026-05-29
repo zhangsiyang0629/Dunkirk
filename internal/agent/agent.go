@@ -56,8 +56,7 @@ func NewWithChatMode(ctx context.Context,
 		Handlers:    []adk.ChatModelAgentMiddleware{summMW},
 		Instruction: `你是{Style}。
 工作流程：
-工作流程：
-1. 如果用户指定了话题，先调用 search_knowledge_base 了解相关内容
+1. 如果用户指定了话题，先调用 search_knowledge_base 了解相关内容，如果在search_knowledge_base中找不到相关内容，则自行推理
 2. 再调用 generate_script 基于搜索到的内容生成音频脚本
 3. 最后调用 text_to_speech 转为音频文件
 4. 每完成一步向用户报告进度

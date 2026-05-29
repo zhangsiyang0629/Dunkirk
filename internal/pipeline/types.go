@@ -13,6 +13,11 @@ type ChapterTask struct {
 	Error         string
 }
 
+const (
+	INTERRUPT_BOOK_SELECT = "_book_select"
+	INTERRUPT_GEN_SELECT  = "_generate_select"
+)
+
 type IntentResult struct {
 	Topic           string   `json:"topic"`
 	Style           string   `json:"style"`
@@ -25,6 +30,21 @@ type IntentResult struct {
 	Chapters        []int    `json:"chapters,omitempty"`
 	CheckpointID    string   `json:"checkpoint_id,omitempty"`
 	InterruptID     string   `json:"interrupt_id,omitempty"`
+	InterruptType   string   `json:"-"`
 	InterruptOpions []string `json:"-"`
 	SkipFile        bool     `json:"skip_file,omitempty"`
+}
+
+func (r *IntentResult) interruptInfo() map[string]any {
+	var question string
+	switch r.InterruptType {
+	case INTERRUPT_BOOK_SELECT:
+		question = "您指的是哪本书？"
+	case INTERRUPT_GEN_SELECT:
+		question = "没有找到相关书籍，是否要继续"
+	}
+	return map[string]any{
+		"question": question,
+		"options":  r.InterruptOpions,
+	}
 }

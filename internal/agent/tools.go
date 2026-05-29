@@ -20,8 +20,9 @@ type ReadDocInput struct {
 }
 
 type SearchInput struct {
-	Query string `json:"query" jsonschema_description:"搜索关键词"`
-	TopK  int    `json:"top_k" jsonschema_description:"返回结果数量"`
+	Query    string `json:"query" jsonschema_description:"搜索关键词"`
+	BookName string `json:"book_name" jsonschema_description:"书籍名称"`
+	TopK     int    `json:"top_k" jsonschema_description:"返回结果数量"`
 }
 
 type ScriptInput struct {
@@ -43,7 +44,16 @@ func newTools(kb *kb.KnowledgeBase, cm *ark.ChatModel, tc *tts.Client) []tool.Ba
 				input.TopK = 3
 			}
 			userID, _ := ctx.Value("userID").(string)
-			docs, err := kb.Search(ctx, input.Query, input.TopK, userID, "")
+			uuid, err := kb.ResolveBookName(ctx, userID, input.BookName)
+			refId := ""
+			if err == nil && uuid != "" {
+				refId = uuid
+			}
+			if refId == "" {
+				return "", nil
+			}
+
+			docs, err := kb.Search(ctx, input.Query, input.TopK, userID, refId)
 			if err != nil {
 				return "", err
 			}
