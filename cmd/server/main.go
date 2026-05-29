@@ -31,9 +31,11 @@ func main() {
 	defer knowledgeBase.Close()
 	ttsClient := tts.NewClient(cfg.TTSVoice, cfg.AudioDir)
 
+	maxTokens := 16384
 	cm, err := ark.NewChatModel(ctx, &ark.ChatModelConfig{
-		APIKey: cfg.ArkAPIKey,
-		Model:  cfg.ArkChatModel,
+		APIKey:    cfg.ArkAPIKey,
+		Model:     cfg.ArkChatModel,
+		MaxTokens: &maxTokens,
 	})
 	if err != nil {
 		log.Fatalf("new chat model: %v", err)

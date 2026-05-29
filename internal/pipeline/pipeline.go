@@ -54,11 +54,18 @@ func New(ctx context.Context,
 
 	prepareNode := compose.InvokableLambda(
 		func(ctx context.Context, task *ChapterTask) (map[string]any, error) {
+			duration := task.DurationMin
+			if duration == 0 {
+				duration = estimateDuration(len(task.Content), task.Style)
+				task.DurationMin = duration
+			}
+			runeLen := duration2RuneLen(duration, task.Style)
 			return map[string]any{
 				"content":      task.Content,
 				"topic":        task.Topic,
 				"style":        task.Style,
-				"duration_min": task.DurationMin,
+				"duration_min": duration,
+				"rune_len":     runeLen,
 			}, nil
 		})
 
@@ -111,6 +118,14 @@ func (p *Pipeline) ProcessChapter(
 
 	ctx = context.WithValue(ctx, ctxKeyChapterTask, task)
 	ctx = context.WithValue(ctx, "eventCh", eventCh)
+
+	optPrepareNode := compose.WithCallbacks(
+		callbacks.NewHandlerBuilder().
+			OnStartFn(onPrepareNodeStart(eventCh)).
+			OnEndFn(onPrepareNodeEnd(eventCh)).
+			Build(),
+	).DesignateNode("prepare")
+
 	optSerchaeNode := compose.WithCallbacks(
 		callbacks.NewHandlerBuilder().
 			OnStartFn(onSearchNodeStart(bookName, eventCh)).
@@ -124,7 +139,7 @@ func (p *Pipeline) ProcessChapter(
 			OnEndFn(onSubChatModeNodeEnd(eventCh)).
 			Build(),
 	).DesignateNodeWithPath(compose.NewNodePath("script", "sub_pipeline_chatMode"))
-	return p.runnable.Invoke(ctx, task, optSerchaeNode, optNestedChatMode)
+	return p.runnable.Invoke(ctx, task, optPrepareNode, optSerchaeNode, optNestedChatMode)
 }
 
 func (p *Pipeline) ProcessChapterStream(
@@ -135,6 +150,14 @@ func (p *Pipeline) ProcessChapterStream(
 
 	ctx = context.WithValue(ctx, ctxKeyChapterTask, task)
 	ctx = context.WithValue(ctx, "eventCh", eventCh)
+
+	optPrepareNode := compose.WithCallbacks(
+		callbacks.NewHandlerBuilder().
+			OnStartFn(onPrepareNodeStart(eventCh)).
+			OnEndFn(onPrepareNodeEnd(eventCh)).
+			Build(),
+	).DesignateNode("prepare")
+
 	optSerchaeNode := compose.WithCallbacks(
 		callbacks.NewHandlerBuilder().
 			OnStartFn(onSearchNodeStart(bookName, eventCh)).
@@ -148,7 +171,7 @@ func (p *Pipeline) ProcessChapterStream(
 			OnEndFn(onSubChatModeNodeEnd(eventCh)).
 			Build(),
 	).DesignateNodeWithPath(compose.NewNodePath("script", "sub_pipeline_chatMode"))
-	return p.runnable.Stream(ctx, task, optSerchaeNode, optNestedChatMode)
+	return p.runnable.Stream(ctx, task, optPrepareNode, optSerchaeNode, optNestedChatMode)
 }
 
 func ProcessBook(ctx context.Context,
@@ -218,7 +241,7 @@ func ProcessBook(ctx context.Context,
 			results = append(results, result)
 			log.Printf("chapter %d/%d done: %s", i+1, len(chapters), result.AudioPath)
 		} else {
-			pushEvent(eventCh, "第%d章完成: %s", "第%d章失败", i+1)
+			pushEvent(eventCh, "第%d章失败", i+1)
 			log.Printf("[ERROR]chapter %d/%d failed", i+1, len(chapters))
 		}
 
@@ -272,6 +295,8 @@ func onSubChatModeNodeStart(
 		}
 		pushEvent(eventCh, "开始第%d章的音频文本生成\n输入:\n%s\n风格:%s\n时长:%d\n",
 			task.ChapterIdx, trunc(strings.Join(parts, "\n"), 100), task.Style, task.DurationMin)
+		// pushEvent(eventCh, "开始第%d章的音频文本生成\n输入:\n%s\n风格:%s\n时长:%d\n",
+		// 	task.ChapterIdx, strings.Join(parts, "\n"), task.Style, task.DurationMin)
 		return ctx
 	}
 }
@@ -287,4 +312,65 @@ func onSubChatModeNodeEnd(
 		pushEvent(eventCh, "完成第%d章的音频文本生成:%s", task.ChapterIdx, trunc(cbOuput.Content, 100))
 		return ctx
 	}
+}
+
+func onPrepareNodeStart(
+	eventCh chan *adk.AgentEvent) func(context.Context, *callbacks.RunInfo, callbacks.CallbackInput) context.Context {
+	return func(ctx context.Context, info *callbacks.RunInfo, input callbacks.CallbackInput) context.Context {
+		if info.Name != "pipeline_prepare" {
+			return ctx
+		}
+		ct := input.(*ChapterTask)
+		if ct.DurationMin != 0 {
+			return ctx
+		}
+		pushEvent(eventCh, "由于用户没有指定音频时长，需要根据原文长度, %d, 和讲述风格, %s, 进行时长预估", len(ct.Content), ct.Style)
+		return ctx
+	}
+}
+
+func onPrepareNodeEnd(
+	eventCh chan *adk.AgentEvent) func(ctx context.Context, _ *callbacks.RunInfo, _ callbacks.CallbackOutput) context.Context {
+	return func(ctx context.Context, info *callbacks.RunInfo, output callbacks.CallbackOutput) context.Context {
+		if info.Name != "pipeline_prepare" {
+			return ctx
+		}
+		ct := output.(map[string]any)
+		pushEvent(eventCh, "时长预估结果为%d分钟左右, 字数%d", ct["duration_min"], ct["rune_len"])
+		return ctx
+	}
+}
+
+func estimateDuration(contentLen int, style string) int {
+	speed := 200
+	s := strings.ToLower(style)
+	switch {
+	case strings.Contains(s, "小朋友"), strings.Contains(s, "儿童"),
+		strings.Contains(s, "小孩"), strings.Contains(s, "慢"):
+		speed = 150
+	case strings.Contains(s, "说书"), strings.Contains(s, "博主"),
+		strings.Contains(s, "快"):
+		speed = 250
+	}
+	m := contentLen / speed
+	if m < 3 {
+		m = 3
+	} else if m > 15 {
+		m = 15
+	}
+	return m
+}
+
+func duration2RuneLen(duration int, style string) int {
+	speed := 200
+	s := strings.ToLower(style)
+	switch {
+	case strings.Contains(s, "小朋友"), strings.Contains(s, "儿童"),
+		strings.Contains(s, "小孩"), strings.Contains(s, "慢"):
+		speed = 150
+	case strings.Contains(s, "说书"), strings.Contains(s, "博主"),
+		strings.Contains(s, "快"):
+		speed = 250
+	}
+	return speed * duration
 }
