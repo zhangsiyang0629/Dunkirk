@@ -304,14 +304,33 @@ func (h *Handler) audioSSE(
 			break
 		}
 		if event.Output != nil && event.Output.MessageOutput != nil {
-			msg, _ := event.Output.MessageOutput.GetMessage()
-			if msg != nil && msg.Content != "" {
-				eventData, _ := json.Marshal(gin.H{
-					"agent":   event.AgentName,
-					"content": msg.Content,
-				})
-				fmt.Fprintf(c.Writer, "event: progress\ndata: %s\n\n", eventData)
-				c.Writer.Flush()
+			mv := event.Output.MessageOutput
+			if mv.IsStreaming {
+				for {
+					chunk, err := mv.MessageStream.Recv()
+					if err == io.EOF {
+						break
+					}
+					if err != nil {
+						log.Fatalf("stream error: %v", err)
+					}
+					eventData, _ := json.Marshal(gin.H{
+						"agent":   event.AgentName,
+						"content": chunk.Content,
+					})
+					fmt.Fprintf(c.Writer, "event: progress\ndata: %s\n\n", eventData)
+					c.Writer.Flush()
+				}
+			} else {
+				msg, _ := event.Output.MessageOutput.GetMessage()
+				if msg != nil && msg.Content != "" {
+					eventData, _ := json.Marshal(gin.H{
+						"agent":   event.AgentName,
+						"content": msg.Content,
+					})
+					fmt.Fprintf(c.Writer, "event: progress\ndata: %s\n\n", eventData)
+					c.Writer.Flush()
+				}
 			}
 		}
 	}
