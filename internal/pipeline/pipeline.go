@@ -9,6 +9,8 @@ import (
 	"log"
 	"strings"
 
+	"github.com/cloudwego/eino/adk"
+	"github.com/cloudwego/eino/callbacks"
 	"github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/compose"
 	"github.com/cloudwego/eino/schema"
@@ -97,15 +99,35 @@ func New(ctx context.Context,
 	return &Pipeline{runnable: runnable, tc: ttsClient, outDir: audioDir, kb: knowledgeBase}, nil
 }
 
-func (p *Pipeline) ProcessChapter(ctx context.Context, task *ChapterTask) (*ChapterTask, error) {
+func (p *Pipeline) ProcessChapter(
+	ctx context.Context,
+	task *ChapterTask,
+	bookName string,
+	eventCh chan *adk.AgentEvent) (*ChapterTask, error) {
+
 	ctx = context.WithValue(ctx, ctxKeyChapterTask, task)
-	return p.runnable.Invoke(ctx, task)
+	optSerchaeNode := compose.WithCallbacks(
+		callbacks.NewHandlerBuilder().
+			OnStartFn(onSearchNodeStart(bookName, eventCh)).
+			OnEndFn(onSearchNodeEnd(bookName, eventCh)).
+			Build(),
+	).DesignateNode("search")
+
+	optNestedChatMode := compose.WithCallbacks(
+		callbacks.NewHandlerBuilder().
+			OnStartFn(onSubChatModeNodeStart(eventCh)).
+			OnEndFn(onSubChatModeNodeEnd(eventCh)).
+			Build(),
+	).DesignateNodeWithPath(compose.NewNodePath("script", "sub_pipeline_chatMode"))
+	return p.runnable.Invoke(ctx, task, optSerchaeNode, optNestedChatMode)
 }
 
 func ProcessBook(ctx context.Context,
 	p *Pipeline,
 	userID, fileRefID, bookName, style string,
-	chapters []int) ([]*ChapterTask, error) {
+	chapters []int,
+	eventCh chan *adk.AgentEvent) ([]*ChapterTask, error) {
+
 	allChapters, err := docproc.GetBriefChapters(ctx, p.kb, fileRefID)
 	if err != nil {
 		return nil, fmt.Errorf("process: %w", err)
@@ -132,13 +154,112 @@ func ProcessBook(ctx context.Context,
 			FileRefID:     fileRefID,
 			TotalChapters: len(chapters),
 		}
-		result, err := p.ProcessChapter(ctx, task)
+		result, err := p.ProcessChapter(ctx, task, bookName, eventCh)
+		var msg string
 		if err != nil {
 			result = task
 			result.Error = err.Error()
+			msg = fmt.Sprintf("第%d章失败: %s", result.ChapterIdx, err.Error())
+		}
+		msg = fmt.Sprintf("第%d章完成: %s", result.ChapterIdx, result.AudioPath)
+		eventCh <- &adk.AgentEvent{
+			AgentName: "pipeline",
+			Output: &adk.AgentOutput{
+				MessageOutput: &adk.MessageVariant{Message: schema.AssistantMessage(msg, nil)}},
 		}
 		results = append(results, result)
 		log.Printf("chapter %d/%d done: %s", i+1, len(chapters), result.AudioPath)
 	}
 	return results, nil
+}
+
+func onSearchNodeStart(
+	bookName string,
+	eventCh chan *adk.AgentEvent) func(context.Context, *callbacks.RunInfo, callbacks.CallbackInput) context.Context {
+	return func(ctx context.Context, info *callbacks.RunInfo, input callbacks.CallbackInput) context.Context {
+		if info.Name != "pipeline_search" {
+			return ctx
+		}
+		ct := input.(*ChapterTask)
+		task, _ := ctx.Value(ctxKeyChapterTask).(*ChapterTask)
+		msg := fmt.Sprintf("开始第%d章的知识库搜索, 搜索关键:%s, fileRefID:%s, 书名:%s",
+			task.ChapterIdx, ct.Topic, ct.FileRefID, bookName)
+		eventCh <- &adk.AgentEvent{
+			AgentName: "pipeline",
+			Output: &adk.AgentOutput{
+				MessageOutput: &adk.MessageVariant{Message: schema.AssistantMessage(msg, nil)}},
+		}
+		return ctx
+	}
+}
+
+func onSearchNodeEnd(
+	bookName string,
+	eventCh chan *adk.AgentEvent) func(ctx context.Context, _ *callbacks.RunInfo, _ callbacks.CallbackOutput) context.Context {
+	return func(ctx context.Context, info *callbacks.RunInfo, output callbacks.CallbackOutput) context.Context {
+		if info.Name != "pipeline_search" {
+			return ctx
+		}
+		ct := output.(*ChapterTask)
+		task, _ := ctx.Value(ctxKeyChapterTask).(*ChapterTask)
+		msg := fmt.Sprintf("完成第%d章的知识库搜索, 搜索关键:%s, fileRefID:%s, 书名:%s, 搜索结果:%s",
+			task.ChapterIdx, ct.Topic, ct.FileRefID, bookName, trunc(ct.Content, 100))
+		eventCh <- &adk.AgentEvent{
+			AgentName: "pipeline",
+			Output: &adk.AgentOutput{
+				MessageOutput: &adk.MessageVariant{Message: schema.AssistantMessage(msg, nil)}},
+		}
+		return ctx
+	}
+}
+
+func onSubChatModeNodeStart(
+	eventCh chan *adk.AgentEvent) func(context.Context, *callbacks.RunInfo, callbacks.CallbackInput) context.Context {
+	return func(ctx context.Context, info *callbacks.RunInfo, input callbacks.CallbackInput) context.Context {
+		if info.Name != "sub_pipeline_gen_script" {
+			return ctx
+		}
+		cbInput := input.(*model.CallbackInput)
+		task, _ := ctx.Value(ctxKeyChapterTask).(*ChapterTask)
+		var parts []string
+		for _, m := range cbInput.Messages {
+			if m.Content != "" {
+				parts = append(parts, fmt.Sprintf("[%s] %s", m.Role, m.Content))
+			}
+		}
+		msg := fmt.Sprintf("开始第%d章的音频文本生成\n输入:\n%s\n风格:%s\n时长:%d\n",
+			task.ChapterIdx, trunc(strings.Join(parts, "\n"), 100), task.Style, task.DurationMin)
+		eventCh <- &adk.AgentEvent{
+			AgentName: "pipeline",
+			Output: &adk.AgentOutput{
+				MessageOutput: &adk.MessageVariant{Message: schema.AssistantMessage(msg, nil)}},
+		}
+		return ctx
+	}
+}
+
+func onSubChatModeNodeEnd(
+	eventCh chan *adk.AgentEvent) func(context.Context, *callbacks.RunInfo, callbacks.CallbackOutput) context.Context {
+	return func(ctx context.Context, info *callbacks.RunInfo, output callbacks.CallbackOutput) context.Context {
+		if info.Name != "sub_pipeline_gen_script" {
+			return ctx
+		}
+		cbOuput := output.(*model.CallbackOutput)
+		task, _ := ctx.Value(ctxKeyChapterTask).(*ChapterTask)
+		msg := fmt.Sprintf("完成第%d章的音频文本生成:%s", task.ChapterIdx, trunc(cbOuput.Message.Content, 100))
+		eventCh <- &adk.AgentEvent{
+			AgentName: "pipeline",
+			Output: &adk.AgentOutput{
+				MessageOutput: &adk.MessageVariant{Message: schema.AssistantMessage(msg, nil)}},
+		}
+		return ctx
+	}
+}
+
+func trunc(s string, n int) string {
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	return string(r[:n]) + "..."
 }

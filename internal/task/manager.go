@@ -4,14 +4,12 @@ import (
 	"context"
 	"dunkirk/internal/agent"
 	"dunkirk/internal/pipeline"
-	"fmt"
 	"log"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/cloudwego/eino/adk"
-	"github.com/cloudwego/eino/schema"
 	"github.com/google/uuid"
 )
 
@@ -127,28 +125,17 @@ func (m *Manager) runPipeline(ctx context.Context, task *Task) {
 		task.FileRefID,
 		task.BookName,
 		task.Style,
-		task.Intent.Chapters)
+		task.Intent.Chapters,
+		task.EventCh)
 	if err != nil {
 		task.Error = err.Error()
 		task.Status = "failed"
 		log.Printf("[pipeline error] %v", err)
 		return
 	}
-	for _, ch := range results {
-		task.Output = append(task.Output, ch.AudioPath)
-		task.EventCh <- &adk.AgentEvent{
-			AgentName: "pipeline",
-			Output: &adk.AgentOutput{
-				MessageOutput: &adk.MessageVariant{
-					Message: schema.AssistantMessage(
-						fmt.Sprintf("第%d章完成: %s", ch.ChapterIdx, ch.AudioPath), nil),
-				},
-			},
-		}
-	}
 	task.Status = "completed"
-	log.Printf("task %s done, userID: %s, fileRefID: %s, topic: %s",
-		task.ID, task.UserID, task.FileRefID, task.Intent.Topic)
+	log.Printf("task %s done, userID: %s, fileRefID: %s, topic: %s, resutlLen: %d",
+		task.ID, task.UserID, task.FileRefID, task.Intent.Topic, len(results))
 	// close(task.done)
 }
 

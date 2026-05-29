@@ -15,5 +15,8 @@ func newScriptChain(ctx context.Context, cm model.BaseChatModel) *compose.Chain[
 		schema.UserMessage("原文内容：{content}\n\n请重点讲述以下主题：{topic}\n\n风格要求：{style}\n目标时长：{duration_min}分钟\n\n请生成纯叙述性朗读文本，禁止任何表格和标记符号。直接输出正文。"),
 	)
 	chain := compose.NewChain[map[string]any, *schema.Message]()
-	return chain.AppendChatTemplate(tmpl).AppendChatModel(cm)
+	return chain.AppendChatTemplate(tmpl).AppendChatModel(cm,
+		compose.WithNodeKey("sub_pipeline_chatMode"),
+		compose.WithNodeName("sub_pipeline_gen_script"),
+	)
 }

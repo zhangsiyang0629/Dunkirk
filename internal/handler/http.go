@@ -169,6 +169,11 @@ func (h *Handler) Chat(c *gin.Context) {
 	c.Header("Content-Type", "text/event-stream")
 	c.Header("Cache-Control", "no-cache")
 	c.Header("Connection", "keep-alive")
+
+	intentDat, _ := json.Marshal(gin.H{"type": "intent_result", "data": result})
+	fmt.Fprintf(c.Writer, "data: %s\n\n", intentDat)
+	c.Writer.Flush()
+
 	if !result.IsAudioRequest {
 		h.chatSSE(c, message, history, userID, result)
 		return
@@ -267,7 +272,6 @@ func (h *Handler) audioSSE(
 		input = fmt.Sprintf("用户话题：%s\n风格要求：%s", result.Topic, result.Style)
 	}
 
-	_ = userID
 	var t *task.Task
 	if result.Mode == "book" {
 		t = h.tm.CreateTaskFromIntent("全本生成", result, userID, ref, result.Book, true)
@@ -294,6 +298,7 @@ func (h *Handler) audioSSE(
 		}
 		if event.Err != nil {
 			errData, _ := json.Marshal(gin.H{"message": event.Err.Error()})
+			log.Printf("[ERROR]audioSSE event err:%v", event.Err.Error())
 			fmt.Fprintf(c.Writer, "event: error\ndata: %s\n\n", errData)
 			c.Writer.Flush()
 			break
@@ -310,6 +315,7 @@ func (h *Handler) audioSSE(
 			}
 		}
 	}
+	c.Writer.Flush()
 }
 
 func (h *Handler) Resume(c *gin.Context) {
