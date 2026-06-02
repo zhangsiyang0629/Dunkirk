@@ -314,6 +314,27 @@ func (kb *KnowledgeBase) FindBooks(ctx context.Context,
 	return books, nil
 }
 
+func (kb *KnowledgeBase) FindPublicBookUids(ctx context.Context, query string) ([]string, error) {
+	query = strings.TrimSpace(query)
+	if query == "" {
+		return []string{}, nil
+	}
+	query = fmt.Sprintf("@visibility:{public} @bookName:*%s*", escapeText(query))
+	res, err := kb.redisClient.FTSearch(ctx, bookNameRefIndex, query).Result()
+	if err != nil {
+		return nil, fmt.Errorf("search failed: %w, query: %s", err, query)
+	}
+	if res.Total == 0 {
+		return []string{}, nil
+	}
+	uids := make([]string, 0, res.Total)
+
+	for _, doc := range res.Docs {
+		uids = append(uids, doc.Fields["refID"])
+	}
+	return uids, nil
+}
+
 func (kb *KnowledgeBase) SaveBookNameRef(ctx context.Context,
 	userID, visibility, bookName, refID string) error {
 	key := fmt.Sprintf("%s%s:%s", bookIndexPrefix, bookName, userID)
@@ -340,7 +361,11 @@ func (kb *KnowledgeBase) ResolveBookName(ctx context.Context, userID, bookName s
 		return "", fmt.Errorf("check exists failed: %w", err)
 	}
 	if exists == 0 {
-		return "", nil
+		res, err := kb.FindPublicBookUids(ctx, bookName)
+		if err != nil {
+			return "", fmt.Errorf("find public book UIDs failed: %w", err)
+		}
+		return res[0], nil
 	}
 
 	fields, err := kb.redisClient.HGetAll(ctx, key).Result()

@@ -285,7 +285,7 @@ func (h *Handler) audioSSE(
 		}
 		t = h.tm.CreateTaskFromIntent(userInput, result, userID, ref, result.Book, false)
 	}
-	log.Printf("[audio task craete] %#v", *t)
+	log.Printf("[audio task create] %#v", *t)
 	h.tm.StartTask(c.Request.Context(), t)
 
 	data, _ := json.Marshal(gin.H{"task_id": t.ID})
@@ -450,6 +450,9 @@ func (h *Handler) UploadFile(c *gin.Context) {
 		os.Remove(hashPath)
 		h.kb.UpdateBookNameRefFilePath(kbCtx, userID, bookName, hashPath)
 		return
+	} else {
+		// 同名public的书名也得去重
+
 	}
 
 	h.kb.SaveBookNameRef(kbCtx, userID, visibility, bookName, refID)
