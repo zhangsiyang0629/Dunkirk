@@ -32,7 +32,7 @@ const maxFileSize = 100 * 1024 * 1024
 type Handler struct {
 	tm           *task.Manager
 	kb           *kb.KnowledgeBase
-	tts          *tts.Client
+	tts          tts.TTSProvider
 	cfg          *config.Config
 	cm           model.BaseChatModel
 	intentParser compose.Runnable[string, *pipeline.IntentResult]
@@ -42,7 +42,7 @@ type Handler struct {
 
 func New(tm *task.Manager,
 	kb *kb.KnowledgeBase,
-	ttsClient *tts.Client,
+	ttsClient tts.TTSProvider,
 	cfg *config.Config,
 	cm model.BaseChatModel,
 	fs *FileStatus) *Handler {

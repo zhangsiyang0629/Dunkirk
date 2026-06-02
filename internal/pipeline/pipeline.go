@@ -26,14 +26,14 @@ var ctxKeyChapterTask = ctxKeyType{}
 type Pipeline struct {
 	runnable compose.Runnable[*ChapterTask, *ChapterTask]
 	kb       *kb.KnowledgeBase
-	tc       *tts.Client
+	tc       tts.TTSProvider
 	outDir   string
 }
 
 func New(ctx context.Context,
 	knowledgeBase *kb.KnowledgeBase,
 	chatModel model.BaseChatModel,
-	ttsClient *tts.Client,
+	ttsClient tts.TTSProvider,
 	audioDir string) (*Pipeline, error) {
 	streamingMode := &streamingModel{BaseChatModel: chatModel}
 	scriptRunnable := newScriptChain(ctx, streamingMode)

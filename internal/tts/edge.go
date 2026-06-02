@@ -19,14 +19,7 @@ const (
 	defaultVoice = "zh-CN-XiaoxiaoNeural"
 )
 
-type BinaryFrame struct {
-	Type      uint16
-	HeaderLen uint16
-	Header    string
-	Audio     []byte
-}
-
-type Client struct {
+type EdgeClient struct {
 	voice  string
 	outDir string
 	mu     sync.Mutex
@@ -34,15 +27,15 @@ type Client struct {
 	exp    time.Time
 }
 
-func NewClient(voice, outDir string) *Client {
+func NewEdgeClient(voice, outDir string) *EdgeClient {
 	if voice == "" {
 		voice = defaultVoice
 	}
-	return &Client{voice: voice, outDir: outDir}
+	return &EdgeClient{voice: voice, outDir: outDir}
 }
 
 // getToken 获取并缓存 token（过期前 5 分钟刷新）
-func (c *Client) getToken(ctx context.Context) (string, error) {
+func (c *EdgeClient) getToken(ctx context.Context) (string, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.token != "" && time.Now().Before(c.exp.Add(-5*time.Minute)) {
@@ -64,7 +57,7 @@ func (c *Client) getToken(ctx context.Context) (string, error) {
 }
 
 // buildSSML 封装 SSML 模板
-func (c *Client) buildSSML(text string) string {
+func (c *EdgeClient) buildSSML(text string) string {
 	escaped := strings.ReplaceAll(text, "&", "&")
 	escaped = strings.ReplaceAll(escaped, "<", "<")
 	escaped = strings.ReplaceAll(escaped, ">", ">")
@@ -76,7 +69,7 @@ func (c *Client) buildSSML(text string) string {
 </speak>`, c.voice, escaped)
 }
 
-func (c *Client) TextToSpeech(ctx context.Context, text, filename string) (string, error) {
+func (c *EdgeClient) TextToSpeech(ctx context.Context, text, filename string) (string, error) {
 	outPath := filepath.Join(c.outDir, filename+".mp3")
 	cmd := exec.CommandContext(context.Background(), "edge-tts",
 		"--voice", c.voice,
@@ -90,22 +83,3 @@ func (c *Client) TextToSpeech(ctx context.Context, text, filename string) (strin
 	}
 	return outPath, nil
 }
-
-// func parseFrame(data []byte) (*BinaryFrame, error) {
-// 	if len(data) < 4 {
-// 		return nil, fmt.Errorf("frame too short")
-// 	}
-// 	frameType := binary.BigEndian.Uint16(data[0:2])
-// 	headerLen := binary.BigEndian.Uint16(data[2:4])
-// 	var header string
-// 	if headerLen > 0 && int(4+headerLen) <= len(data) {
-// 		header = string(data[4 : 4+headerLen])
-// 	}
-// 	audio := data[4+headerLen:]
-// 	return &BinaryFrame{
-// 		Type:      frameType,
-// 		HeaderLen: headerLen,
-// 		Header:    header,
-// 		Audio:     audio,
-// 	}, nil
-// }

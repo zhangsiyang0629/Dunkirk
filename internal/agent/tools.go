@@ -37,7 +37,7 @@ type TTSInput struct {
 	Filename string `json:"filename" jsonschema_description:"输出文件名(不含扩展名)"`
 }
 
-func newTools(kb *kb.KnowledgeBase, cm *ark.ChatModel, tc *tts.Client) []tool.BaseTool {
+func newTools(kb *kb.KnowledgeBase, cm *ark.ChatModel, tc tts.TTSProvider) []tool.BaseTool {
 	search, _ := utils.InferTool("search_knowledge_base", "搜索知识库中相关的章节，返回章节标题列表。",
 		func(ctx context.Context, input *SearchInput) (string, error) {
 			if input.TopK <= 0 {

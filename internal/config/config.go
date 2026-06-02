@@ -14,6 +14,7 @@ type Config struct {
 	Port              string
 	AudioDir          string
 	UploadDir         string
+	TTSProvider       string
 }
 
 func Load() *Config {
@@ -29,6 +30,7 @@ func Load() *Config {
 		Port:              envOrDefault("PORT", "8080"),
 		AudioDir:          envOrDefault("AUDIO_DIR", "audio"),
 		UploadDir:         envOrDefault("UPLOAD_DIR", "uploads"),
+		TTSProvider:       envOrDefault("TTS_PROVIDER", "edge"),
 	}
 }
 

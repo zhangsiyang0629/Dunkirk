@@ -29,8 +29,16 @@ func main() {
 		log.Fatalf("init kb: %v", err)
 	}
 	defer knowledgeBase.Close()
-	ttsClient := tts.NewClient(cfg.TTSVoice, cfg.AudioDir)
-	agt, err := agent.New(ctx, cfg, knowledgeBase, ttsClient)
+
+	var ttsProvider tts.TTSProvider
+	switch cfg.TTSProvider {
+	case "gcp":
+		ttsProvider = tts.NewGcpClient(cfg.TTSVoice, cfg.AudioDir)
+	default:
+		ttsProvider = tts.NewEdgeClient(cfg.TTSVoice, cfg.AudioDir)
+	}
+
+	agt, err := agent.New(ctx, cfg, knowledgeBase, ttsProvider)
 	if err != nil {
 		log.Fatalf("init agent: %v", err)
 	}
