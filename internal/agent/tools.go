@@ -127,8 +127,9 @@ func newTools(kb *kb.KnowledgeBase, cm *ark.ChatModel, tc *tts.Client) []tool.Ba
 
 	ttsTool, _ := utils.InferTool("text_to_speech", "将文本转为音频文件，返回文件路径。",
 		func(ctx context.Context, input *TTSInput) (string, error) {
+			userID, _ := ctx.Value("userID").(string)
 			log.Printf("TTS called: filename=%s, text_len=%d", input.Filename, len(input.Text))
-			path, err := tc.TextToSpeech(ctx, input.Text, input.Filename)
+			path, err := tc.TextToSpeech(ctx, input.Text, input.Filename, userID)
 			if err != nil {
 				return "", fmt.Errorf("tts: %w", err)
 			}

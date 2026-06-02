@@ -1,5 +1,5 @@
 <script setup>
-defineProps({ messages: Array })
+const props = defineProps({ messages: Array, userId: String })
 const emit = defineEmits(['interrupt-resume'])
 
 function onInterruptClick(msg, opt) {
@@ -8,6 +8,12 @@ function onInterruptClick(msg, opt) {
     interrupt_id: msg.interrupt_id,
     choice: opt,
   })
+}
+
+function extractAudio(text) {
+  if (!text) return []
+  const matches = [...text.matchAll(/([^\/]+\.mp3)/g)]
+  return matches.map(m => m[1]).filter((v, i, a) => a.indexOf(v) === i)
 }
 </script>
 <template>
@@ -22,7 +28,15 @@ function onInterruptClick(msg, opt) {
       <!-- 进度消息 - 左侧 -->
       <div v-else-if="msg.type === 'agent_msg'" class="agent-row">
         <div class="agent-label">{{ msg.agent }}</div>
-        <div class="bubble agent-bubble">{{ msg.content }}</div>
+        <div class="bubble agent-bubble">
+          <div class="msg-content">{{ msg.content }}</div>
+          <div v-if="extractAudio(msg.content).length" class="inline-audio">
+            <div v-for="af in extractAudio(msg.content)" :key="af" class="inline-audio-item">
+              <span>🔊 {{ af }}</span>
+              <a :href="`/api/v1/audio/download/${userId}/${encodeURIComponent(af)}`" target="_blank" class="dl-btn" download>下载</a>
+            </div>
+          </div>
+        </div>
       </div>
 
       <!-- Token 流 -->
@@ -96,5 +110,20 @@ function onInterruptClick(msg, opt) {
 
 /* 完成 & 错误 */
 .done-row { text-align: center; color: #4caf50; font-weight: 500; font-size: 14px; padding: 12px; }
+.dl-btn {
+  padding: 4px 12px; background: #22c55e; color: #fff;
+  border-radius: 6px; text-decoration: none; font-size: 12px; flex-shrink: 0;
+  transition: background 0.2s;
+}
+.dl-btn:hover { background: #16a34a; }
 .error-row { text-align: center; color: #d32f2f; font-size: 14px; padding: 12px; }
+.inline-audio {
+  margin-top: 6px; padding-top: 6px; border-top: 1px solid #e0e0e0;
+  font-size: 13px;
+}
+.inline-audio-item {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 2px 0;
+}
+.msg-content { white-space: pre-wrap; }
 </style>

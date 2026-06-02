@@ -81,8 +81,9 @@ func New(ctx context.Context,
 
 	ttsNode := compose.InvokableLambda(
 		func(ctx context.Context, task *ChapterTask) (*ChapterTask, error) {
-			filename := fmt.Sprintf("chapter_%d", task.ChapterIdx)
-			path, err := ttsClient.TextToSpeech(ctx, task.Script, filename)
+			//filename := fmt.Sprintf("chapter_%d", task.ChapterIdx)
+			userID, _ := ctx.Value("userID").(string)
+			path, err := ttsClient.TextToSpeech(ctx, task.Script, task.Topic, userID)
 			if err != nil {
 				return nil, err
 			}
@@ -177,6 +178,7 @@ func (p *Pipeline) ProcessChapterStream(
 func ProcessBook(ctx context.Context,
 	p *Pipeline,
 	userID, fileRefID, bookName, style string,
+	durationMin int,
 	chapters []int,
 	eventCh chan *adk.AgentEvent) ([]*ChapterTask, error) {
 
@@ -190,6 +192,7 @@ func ProcessBook(ctx context.Context,
 	} else {
 		for _, idx := range chapters {
 			if idx > 0 && idx <= len(allChapters) {
+				allChapters[idx-1].ChapterInt = idx
 				targets = append(targets, allChapters[idx-1])
 			}
 		}
@@ -201,7 +204,7 @@ func ProcessBook(ctx context.Context,
 		task := &ChapterTask{
 			Topic:         ch.Title,
 			Style:         style,
-			DurationMin:   0,
+			DurationMin:   durationMin,
 			ChapterIdx:    i + 1,
 			FileRefID:     fileRefID,
 			TotalChapters: len(chapters),
@@ -237,12 +240,12 @@ func ProcessBook(ctx context.Context,
 		// 	msg = fmt.Sprintf("第%d章失败: %s", result.ChapterIdx, err.Error())
 		// }
 		if result != nil {
-			pushEvent(eventCh, "\n第%d章完成: %s\n", result.ChapterIdx, result.AudioPath)
+			pushEvent(eventCh, "\n第%d章完成: %s\n", ch.ChapterInt, result.AudioPath)
 			results = append(results, result)
-			log.Printf("chapter %d/%d done: %s", i+1, len(chapters), result.AudioPath)
+			log.Printf("chapter %d/%d done: %s", ch.ChapterInt, len(chapters), result.AudioPath)
 		} else {
-			pushEvent(eventCh, "\n第%d章失败\n", i+1)
-			log.Printf("[ERROR]chapter %d/%d failed", i+1, len(chapters))
+			pushEvent(eventCh, "\n第%d章失败\n", ch.ChapterInt)
+			log.Printf("[ERROR]chapter %d/%d failed", ch.ChapterInt, len(chapters))
 		}
 
 	}

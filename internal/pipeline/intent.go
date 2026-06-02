@@ -51,7 +51,7 @@ func NewIntentParser(ctx context.Context,
 {{
     "topic": "用户指定的话题或章节标题",
     "style": "用户指定的风格要求，未指定则空字符串",
-    "duration_min": 0, // 分钟号，如"5分钟"→5，"10分钟"→10，未指定则为0,
+    "duration_min": 0, // 分钟，用户指定的音频时长, 如"5分钟左右"→5, "10分钟"→10, 未指定则为0,
 	"book": "用户提到的书籍名称",
     "mode": "chat"/"chapter"/"book",
     "is_audio_request": true/false,

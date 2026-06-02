@@ -71,8 +71,8 @@ func Register(r *gin.Engine, h *Handler) {
 		v1.POST("/upload", h.UploadFile)
 		v1.POST("/resume", h.Resume)
 		v1.DELETE("/upload/:file_ref_id", h.DeleteFile)
+		v1.GET("/audio/download/:userID/:filename", h.DownloadUserAudio)
 	}
-	r.GET("/api/audio/:filename", h.DownloadAudio)
 }
 
 type resumeReq struct {
@@ -529,4 +529,14 @@ func (h *Handler) DeleteFile(c *gin.Context) {
 	// 删内存记录
 	h.fileStatus.Remove(refID)
 	c.JSON(200, gin.H{"status": "deleted"})
+}
+
+func (h *Handler) DownloadUserAudio(c *gin.Context) {
+	userID := c.Param("userID")
+	filename := c.Param("filename")
+	if strings.Contains(filename, "..") || strings.Contains(userID, "..") {
+		c.JSON(400, gin.H{"error": "invalid path"})
+		return
+	}
+	c.File(filepath.Join(h.cfg.AudioDir, userID, filename))
 }

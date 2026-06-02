@@ -125,6 +125,7 @@ func (m *Manager) runPipeline(ctx context.Context, task *Task) {
 		task.FileRefID,
 		task.BookName,
 		task.Style,
+		task.Intent.DurationMin,
 		task.Intent.Chapters,
 		task.EventCh)
 	if err != nil {

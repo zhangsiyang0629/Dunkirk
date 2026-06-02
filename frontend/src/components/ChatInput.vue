@@ -30,7 +30,8 @@ function autoResize() {
       v-model="text"
       :disabled="disabled"
       placeholder="输入需求，如「生成第1到5回的音频」"
-      @keydown.enter.ctrl="send"
+      @keydown.enter.exact="send"
+      @keydown.shift.enter="(e) => { /* allow default newline */ }"
       @input="autoResize"
       rows="1"
     ></textarea>

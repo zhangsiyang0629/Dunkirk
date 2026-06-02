@@ -30,6 +30,7 @@ type BriefChapter struct {
 	Title      string `json:"title"`
 	Index      int    `json:"index"`
 	ContentLen int    `json:"contentLen"`
+	ChapterInt int    `json:"-"`
 }
 
 func NewBriefChapter(title string, index int, contentLen int) BriefChapter {

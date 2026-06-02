@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -76,8 +77,10 @@ func (c *Client) buildSSML(text string) string {
 </speak>`, c.voice, escaped)
 }
 
-func (c *Client) TextToSpeech(ctx context.Context, text, filename string) (string, error) {
-	outPath := filepath.Join(c.outDir, filename+".mp3")
+func (c *Client) TextToSpeech(ctx context.Context, text, filename, userID string) (string, error) {
+	userDir := filepath.Join(c.outDir, userID)
+	os.MkdirAll(userDir, 0755)
+	outPath := filepath.Join(userDir, filename+".mp3")
 	cmd := exec.CommandContext(context.Background(), "edge-tts",
 		"--voice", c.voice,
 		"--text", text,
