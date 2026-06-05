@@ -2,6 +2,13 @@ package config
 
 import "os"
 
+const (
+	TTS_EDGE  = "edge"
+	TTS_AZURE = "azure"
+	TTS_QWEN  = "qwen"
+	TTS_COSY  = "cosy"
+)
+
 type Config struct {
 	ArkAPIKey         string
 	ArkChatModel      string
@@ -14,6 +21,10 @@ type Config struct {
 	Port              string
 	AudioDir          string
 	UploadDir         string
+	TTSProvider       string
+	AzureSpeechKey    string
+	AzureRegion       string
+	DashScopeAPIKey   string
 }
 
 func Load() *Config {
@@ -29,6 +40,10 @@ func Load() *Config {
 		Port:              envOrDefault("PORT", "8080"),
 		AudioDir:          envOrDefault("AUDIO_DIR", "audio"),
 		UploadDir:         envOrDefault("UPLOAD_DIR", "uploads"),
+		TTSProvider:       envOrDefault("TTS_PROVIDER", TTS_EDGE),
+		AzureSpeechKey:    os.Getenv("AZURE_SPEECH_KEY"),
+		AzureRegion:       envOrDefault("AZURE_REGION", "eastasia"),
+		DashScopeAPIKey:   os.Getenv("DASHSCOPE_API_KEY"),
 	}
 }
 

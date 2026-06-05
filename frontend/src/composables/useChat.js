@@ -18,7 +18,10 @@ export function useChat() {
                 break
             case 'progress':
                 const lastProgress = messages.value[messages.value.length - 1]
-                if (lastProgress && lastProgress.type === 'agent_msg' && lastProgress.agent === data.agent) {
+                if (data.agent === 'tts' && lastProgress && lastProgress.type === 'agent_msg' && lastProgress.agent === 'tts') {
+                    // TTS 进度替换而非追加
+                    lastProgress.content = data.content
+                } else if (lastProgress && lastProgress.type === 'agent_msg' && lastProgress.agent === data.agent) {
                     lastProgress.content += data.content
                 } else {
                     messages.value.push({ id: Date.now(), type: 'agent_msg', agent: data.agent, content: data.content })

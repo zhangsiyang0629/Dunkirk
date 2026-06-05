@@ -26,17 +26,20 @@ var ctxKeyChapterTask = ctxKeyType{}
 type Pipeline struct {
 	runnable compose.Runnable[*ChapterTask, *ChapterTask]
 	kb       *kb.KnowledgeBase
-	tc       *tts.Client
+	tc       tts.TTSProvider
 	outDir   string
 }
 
 func New(ctx context.Context,
 	knowledgeBase *kb.KnowledgeBase,
 	chatModel model.BaseChatModel,
-	ttsClient *tts.Client,
+	ttsClient tts.TTSProvider,
 	audioDir string) (*Pipeline, error) {
 	streamingMode := &streamingModel{BaseChatModel: chatModel}
-	scriptRunnable := newScriptChain(ctx, streamingMode)
+	//ssmlRender := NewEdgeRenderer()
+	// scriptRunnable := newScriptChain(ctx, streamingMode, ssmlRender)
+	plainChain := newPlainScriptChain(ctx, streamingMode)
+	ssmlChain := newSSMLScriptChain(ctx, streamingMode)
 	searchNode := compose.InvokableLambda(
 		func(ctx context.Context, task *ChapterTask) (*ChapterTask, error) {
 			userID, _ := ctx.Value("userID").(string)
@@ -66,6 +69,7 @@ func New(ctx context.Context,
 				"style":        task.Style,
 				"duration_min": duration,
 				"rune_len":     runeLen,
+				"use_ssml":     task.UseSSML,
 			}, nil
 		})
 
@@ -90,17 +94,28 @@ func New(ctx context.Context,
 			task.AudioPath = path
 			return task, nil
 		})
+	branch := compose.NewGraphBranch(func(ctx context.Context, input map[string]any) (string, error) {
+		fmt.Printf("branch input use_ssml: %v\n", input["use_ssml"])
+		if input["use_ssml"].(bool) {
+			return "ssml_script", nil
+		}
+		return "plain_script", nil
+	}, map[string]bool{"plain_script": true, "ssml_script": true})
 
 	g := compose.NewGraph[*ChapterTask, *ChapterTask]()
 	g.AddLambdaNode("search", searchNode, compose.WithNodeName("pipeline_search"))
 	g.AddLambdaNode("prepare", prepareNode, compose.WithNodeName("pipeline_prepare"))
-	g.AddGraphNode("script", scriptRunnable, compose.WithNodeName("pipeline_script"))
+	g.AddGraphNode("plain_script", plainChain, compose.WithNodeName("pipeline_plain_script"))
+	g.AddGraphNode("ssml_script", ssmlChain, compose.WithNodeName("pipeline_ssml_script"))
+	//g.AddGraphNode("script", scriptRunnable, compose.WithNodeName("pipeline_script"))
 	g.AddLambdaNode("extract", extractNode, compose.WithNodeName("pipeline_extract"))
 	g.AddLambdaNode("tts", ttsNode, compose.WithNodeName("pipeline_tts"))
+
 	g.AddEdge(compose.START, "search")
 	g.AddEdge("search", "prepare")
-	g.AddEdge("prepare", "script")
-	g.AddEdge("script", "extract")
+	g.AddBranch("prepare", branch)
+	g.AddEdge("plain_script", "extract")
+	g.AddEdge("ssml_script", "extract")
 	g.AddEdge("extract", "tts")
 	g.AddEdge("tts", compose.END)
 
@@ -111,37 +126,37 @@ func New(ctx context.Context,
 	return &Pipeline{runnable: runnable, tc: ttsClient, outDir: audioDir, kb: knowledgeBase}, nil
 }
 
-func (p *Pipeline) ProcessChapter(
-	ctx context.Context,
-	task *ChapterTask,
-	bookName string,
-	eventCh chan *adk.AgentEvent) (*ChapterTask, error) {
+// func (p *Pipeline) ProcessChapter(
+// 	ctx context.Context,
+// 	task *ChapterTask,
+// 	bookName string,
+// 	eventCh chan *adk.AgentEvent) (*ChapterTask, error) {
 
-	ctx = context.WithValue(ctx, ctxKeyChapterTask, task)
-	ctx = context.WithValue(ctx, "eventCh", eventCh)
+// 	ctx = context.WithValue(ctx, ctxKeyChapterTask, task)
+// 	ctx = context.WithValue(ctx, "eventCh", eventCh)
 
-	optPrepareNode := compose.WithCallbacks(
-		callbacks.NewHandlerBuilder().
-			OnStartFn(onPrepareNodeStart(eventCh)).
-			OnEndFn(onPrepareNodeEnd(eventCh)).
-			Build(),
-	).DesignateNode("prepare")
+// 	optPrepareNode := compose.WithCallbacks(
+// 		callbacks.NewHandlerBuilder().
+// 			OnStartFn(onPrepareNodeStart(eventCh)).
+// 			OnEndFn(onPrepareNodeEnd(eventCh)).
+// 			Build(),
+// 	).DesignateNode("prepare")
 
-	optSerchaeNode := compose.WithCallbacks(
-		callbacks.NewHandlerBuilder().
-			OnStartFn(onSearchNodeStart(bookName, eventCh)).
-			OnEndFn(onSearchNodeEnd(bookName, eventCh)).
-			Build(),
-	).DesignateNode("search")
+// 	optSerchaeNode := compose.WithCallbacks(
+// 		callbacks.NewHandlerBuilder().
+// 			OnStartFn(onSearchNodeStart(bookName, eventCh)).
+// 			OnEndFn(onSearchNodeEnd(bookName, eventCh)).
+// 			Build(),
+// 	).DesignateNode("search")
 
-	optNestedChatMode := compose.WithCallbacks(
-		callbacks.NewHandlerBuilder().
-			OnStartFn(onSubChatModeNodeStart(eventCh)).
-			OnEndFn(onSubChatModeNodeEnd(eventCh)).
-			Build(),
-	).DesignateNodeWithPath(compose.NewNodePath("script", "sub_pipeline_chatMode"))
-	return p.runnable.Invoke(ctx, task, optPrepareNode, optSerchaeNode, optNestedChatMode)
-}
+// 	optNestedChatMode := compose.WithCallbacks(
+// 		callbacks.NewHandlerBuilder().
+// 			OnStartFn(onSubChatModeNodeStart(eventCh)).
+// 			OnEndFn(onSubChatModeNodeEnd(eventCh)).
+// 			Build(),
+// 	).DesignateNodeWithPath(compose.NewNodePath("script", "sub_pipeline_chatMode"))
+// 	return p.runnable.Invoke(ctx, task, optPrepareNode, optSerchaeNode, optNestedChatMode)
+// }
 
 func (p *Pipeline) ProcessChapterStream(
 	ctx context.Context,
@@ -151,6 +166,7 @@ func (p *Pipeline) ProcessChapterStream(
 
 	ctx = context.WithValue(ctx, ctxKeyChapterTask, task)
 	ctx = context.WithValue(ctx, "eventCh", eventCh)
+	ctx = context.WithValue(ctx, "style", task.Style)
 
 	optPrepareNode := compose.WithCallbacks(
 		callbacks.NewHandlerBuilder().
@@ -166,13 +182,20 @@ func (p *Pipeline) ProcessChapterStream(
 			Build(),
 	).DesignateNode("search")
 
-	optNestedChatMode := compose.WithCallbacks(
+	optNestedChatMode1 := compose.WithCallbacks(
 		callbacks.NewHandlerBuilder().
 			OnStartFn(onSubChatModeNodeStart(eventCh)).
 			OnEndFn(onSubChatModeNodeEnd(eventCh)).
 			Build(),
-	).DesignateNodeWithPath(compose.NewNodePath("script", "sub_pipeline_chatMode"))
-	return p.runnable.Stream(ctx, task, optPrepareNode, optSerchaeNode, optNestedChatMode)
+	).DesignateNodeWithPath(compose.NewNodePath("plain_script", "sub_pipeline_plain_chatMode"))
+
+	optNestedChatMode2 := compose.WithCallbacks(
+		callbacks.NewHandlerBuilder().
+			OnStartFn(onSubChatModeNodeStart(eventCh)).
+			OnEndFn(onSubChatModeNodeEnd(eventCh)).
+			Build(),
+	).DesignateNodeWithPath(compose.NewNodePath("ssml_script", "sub_pipeline_ssml_chatMode"))
+	return p.runnable.Stream(ctx, task, optPrepareNode, optSerchaeNode, optNestedChatMode1, optNestedChatMode2)
 }
 
 func ProcessBook(ctx context.Context,
@@ -180,7 +203,8 @@ func ProcessBook(ctx context.Context,
 	userID, fileRefID, bookName, style string,
 	durationMin int,
 	chapters []int,
-	eventCh chan *adk.AgentEvent) ([]*ChapterTask, error) {
+	eventCh chan *adk.AgentEvent,
+	useSSML bool) ([]*ChapterTask, error) {
 
 	allChapters, err := docproc.GetBriefChapters(ctx, p.kb, fileRefID)
 	if err != nil {
@@ -207,6 +231,7 @@ func ProcessBook(ctx context.Context,
 			DurationMin:   durationMin,
 			ChapterIdx:    i + 1,
 			FileRefID:     fileRefID,
+			UseSSML:       useSSML,
 			TotalChapters: len(chapters),
 		}
 		var result *ChapterTask
@@ -285,7 +310,7 @@ func onSearchNodeEnd(
 func onSubChatModeNodeStart(
 	eventCh chan *adk.AgentEvent) func(context.Context, *callbacks.RunInfo, callbacks.CallbackInput) context.Context {
 	return func(ctx context.Context, info *callbacks.RunInfo, input callbacks.CallbackInput) context.Context {
-		if info.Name != "sub_pipeline_gen_script" {
+		if info.Name != "sub_pipeline_plain_gen_script" && info.Name != "sub_pipeline_ssml_gen_script" {
 			return ctx
 		}
 		msgs := input.([]*schema.Message)
@@ -307,7 +332,7 @@ func onSubChatModeNodeStart(
 func onSubChatModeNodeEnd(
 	eventCh chan *adk.AgentEvent) func(context.Context, *callbacks.RunInfo, callbacks.CallbackOutput) context.Context {
 	return func(ctx context.Context, info *callbacks.RunInfo, output callbacks.CallbackOutput) context.Context {
-		if info.Name != "sub_pipeline_gen_script" {
+		if info.Name != "sub_pipeline_plain_gen_script" && info.Name != "sub_pipeline_ssml_gen_script" {
 			return ctx
 		}
 		cbOuput := output.(*schema.Message)

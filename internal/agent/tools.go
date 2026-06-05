@@ -37,7 +37,7 @@ type TTSInput struct {
 	Filename string `json:"filename" jsonschema_description:"输出文件名(不含扩展名)"`
 }
 
-func newTools(kb *kb.KnowledgeBase, cm *ark.ChatModel, tc *tts.Client) []tool.BaseTool {
+func newTools(kb *kb.KnowledgeBase, cm *ark.ChatModel, tc tts.TTSProvider) []tool.BaseTool {
 	search, _ := utils.InferTool("search_knowledge_base", "搜索知识库中相关的章节，返回章节标题列表。",
 		func(ctx context.Context, input *SearchInput) (string, error) {
 			if input.TopK <= 0 {
@@ -103,17 +103,15 @@ func newTools(kb *kb.KnowledgeBase, cm *ark.ChatModel, tc *tts.Client) []tool.Ba
 主题：%s
 风格要求：%s
 目标时长：%d 分钟
-请基于原文内容，生成一份完整的、适合朗读的音频脚本。注意：
-1. 严格基于原文，不要随意编造事实
-2. 语言生动自然，符合%s的风格要求
-3. 时长控制在%d分钟左右（约%d字）
-4. 输出的文本应当是**纯叙述性文字**，适合直接朗读
-5. **禁止使用任何表格、序号列表、星号、竖线、时间戳标记**
-6. **直接输出正文本身，不要加"脚本如下"之类的引导语**
-7. query 参数：传入用户的原始输入话题（如"苦肉计"、"草船借箭"），不要替换为章节标题
-8. topic 参数：传入需要重点讲述的主题描述或章节标题`,
-				contextMsg, input.Topic, input.Style, input.DurationMin,
-				input.Style, input.DurationMin, input.DurationMin*200)
+目标字数：%d字
+
+请基于原文内容，生成一份 SSML 增强的音频脚本。输出要求：
+- 使用以下伪标签增强表达，不要使用 XML 或 SSML 标签
+- [em]...[/em] 强调关键词
+- [slow]...[/slow] 慢速用于悬念高潮
+- [fast]...[/fast] 快速用于紧张场景
+- [pause:300ms] 短停顿`,
+				contextMsg, input.Topic, input.Style, input.DurationMin, input.DurationMin*200)
 			log.Printf("Generating script with context: %s", trunc(contextMsg, 500))
 			resp, err := cm.Generate(ctx, []*schema.Message{
 				schema.SystemMessage("你是一位专业的有声读物编剧，擅长将各类内容转化为生动、吸引人的音频脚本。"),

@@ -28,6 +28,7 @@ type Task struct {
 	done         chan struct{}
 	Intent       *pipeline.IntentResult
 	UserID       string
+	UseSSML      bool
 }
 
 func (t *Task) NextEvent() (*adk.AgentEvent, bool) {
@@ -127,7 +128,8 @@ func (m *Manager) runPipeline(ctx context.Context, task *Task) {
 		task.Style,
 		task.Intent.DurationMin,
 		task.Intent.Chapters,
-		task.EventCh)
+		task.EventCh,
+		task.UseSSML)
 	if err != nil {
 		task.Error = err.Error()
 		task.Status = "failed"

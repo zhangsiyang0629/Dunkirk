@@ -22,7 +22,7 @@ type Agent struct {
 func New(ctx context.Context,
 	cfg *config.Config,
 	knowledgeBase *kb.KnowledgeBase,
-	ttsClient *tts.Client) (*Agent, error) {
+	ttsClient tts.TTSProvider) (*Agent, error) {
 	cm, err := ark.NewChatModel(ctx, &ark.ChatModelConfig{
 		APIKey: cfg.ArkAPIKey,
 		Model:  cfg.ArkChatModel,
@@ -37,7 +37,7 @@ func NewWithChatMode(ctx context.Context,
 	cfg *config.Config,
 	cm *ark.ChatModel,
 	knowledgeBase *kb.KnowledgeBase,
-	ttsClient *tts.Client) (*Agent, error) {
+	ttsClient tts.TTSProvider) (*Agent, error) {
 	tools := newTools(knowledgeBase, cm, ttsClient)
 
 	summMW, err := summarization.New(ctx, &summarization.Config{

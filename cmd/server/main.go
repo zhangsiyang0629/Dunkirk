@@ -29,8 +29,7 @@ func main() {
 		log.Fatalf("init kb: %v", err)
 	}
 	defer knowledgeBase.Close()
-	ttsClient := tts.NewClient(cfg.TTSVoice, cfg.AudioDir)
-
+	ttsProvider := tts.GetTTSProvider(cfg)
 	maxTokens := 16384
 	cm, err := ark.NewChatModel(ctx, &ark.ChatModelConfig{
 		APIKey:    cfg.ArkAPIKey,
@@ -41,7 +40,7 @@ func main() {
 		log.Fatalf("new chat model: %v", err)
 	}
 
-	agt, err := agent.NewWithChatMode(ctx, cfg, cm, knowledgeBase, ttsClient)
+	agt, err := agent.NewWithChatMode(ctx, cfg, cm, knowledgeBase, ttsProvider)
 	if err != nil {
 		log.Fatalf("init agent: %v", err)
 	}
@@ -64,14 +63,14 @@ func main() {
 	// Register as global callbacks (applies to all subsequent runs)
 	callbacks.AppendGlobalHandlers(ghandler)
 
-	p, err := pipeline.New(ctx, knowledgeBase, cm, ttsClient, cfg.AudioDir)
+	p, err := pipeline.New(ctx, knowledgeBase, cm, ttsProvider, cfg.AudioDir)
 	if err != nil {
 		log.Fatalf("init pipeline: %v", err)
 	}
 
 	taskMgr := task.NewManager(agt, p)
 	fileStatus := handler.NewFileStatus()
-	h := handler.New(taskMgr, knowledgeBase, ttsClient, cfg, cm, fileStatus)
+	h := handler.New(taskMgr, knowledgeBase, ttsProvider, cfg, cm, fileStatus)
 	initParser, err := pipeline.NewIntentParser(ctx, cm, knowledgeBase)
 	if err != nil {
 		log.Fatalf("init intent parser: %v", err)

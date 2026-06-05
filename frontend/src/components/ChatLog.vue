@@ -12,7 +12,7 @@ function onInterruptClick(msg, opt) {
 
 function extractAudio(text) {
   if (!text) return []
-  const matches = [...text.matchAll(/([^\/]+\.mp3)/g)]
+  const matches = [...text.matchAll(/([^\/]+\.(mp3|wav))/g)]
   return matches.map(m => m[1]).filter((v, i, a) => a.indexOf(v) === i)
 }
 </script>
@@ -29,7 +29,8 @@ function extractAudio(text) {
       <div v-else-if="msg.type === 'agent_msg'" class="agent-row">
         <div class="agent-label">{{ msg.agent }}</div>
         <div class="bubble agent-bubble">
-          <div class="msg-content">{{ msg.content }}</div>
+          <div v-if="msg.content.includes('🎤') && !msg.content.includes('✅')" class="msg-content tts-loading">{{ msg.content }}</div>
+          <div v-else class="msg-content">{{ msg.content }}</div>
           <div v-if="extractAudio(msg.content).length" class="inline-audio">
             <div v-for="af in extractAudio(msg.content)" :key="af" class="inline-audio-item">
               <span>🔊 {{ af }}</span>
@@ -126,4 +127,17 @@ function extractAudio(text) {
   padding: 2px 0;
 }
 .msg-content { white-space: pre-wrap; }
+.tts-loading::after {
+  display: inline-block;
+  content: " ...";
+  animation: dots 1.5s steps(3) infinite;
+  width: 1.5em;
+  text-align: left;
+}
+@keyframes dots {
+  0%   { content: " ."; }
+  33%  { content: " .."; }
+  66%  { content: " ..."; }
+  100% { content: " ."; }
+}
 </style>

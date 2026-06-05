@@ -11,6 +11,7 @@ type ChapterTask struct {
 	AudioPath     string
 	FileRefID     string
 	Error         string
+	UseSSML       bool
 }
 
 const (

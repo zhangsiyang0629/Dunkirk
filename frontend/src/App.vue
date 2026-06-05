@@ -40,7 +40,7 @@ const downloadFiles = computed(() => {
   const files = []
   for (const msg of messages.value) {
     if (msg.content) {
-      const matches = msg.content.matchAll(/([^\/]+\.mp3)/g)
+      const matches = msg.content.matchAll(/([^\/]+\.(mp3|wav))/g)
       for (const m of matches) {
         if (!files.some(f => f.name === m[1])) files.push({ name: m[1] })
       }
