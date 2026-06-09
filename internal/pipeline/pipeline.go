@@ -10,6 +10,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"regexp"
 	"strings"
 
 	"github.com/cloudwego/eino/adk"
@@ -43,6 +44,17 @@ func New(ctx context.Context,
 	searchNode := compose.InvokableLambda(
 		func(ctx context.Context, task *ChapterTask) (*ChapterTask, error) {
 			userID, _ := ctx.Value("userID").(string)
+			// 优先按题目精确查询
+			if task.FileRefID != "" && isChapterTitle(task.Topic) {
+				content, err := knowledgeBase.GetChapterSegments(ctx, task.FileRefID, task.Topic)
+				if err != nil {
+					return nil, err
+				}
+				task.Content = content
+				task.IsExactSerach = true
+				return task, nil
+			}
+
 			docs, err := knowledgeBase.Search(ctx, task.Topic, 5, userID, task.FileRefID)
 			if err != nil {
 				return nil, err
@@ -63,6 +75,13 @@ func New(ctx context.Context,
 				task.DurationMin = duration
 			}
 			runeLen := duration2RuneLen(duration, task.Style)
+
+			userID, _ := ctx.Value("userID").(string)
+			if task.FileRefID != "" && task.ChapterInt > 1 {
+				ending, _ := knowledgeBase.GetChapterEnding(ctx, userID, task.FileRefID, task.ChapterInt-1)
+				task.PrevEnding = ending
+			}
+
 			return map[string]any{
 				"content":      task.Content,
 				"topic":        task.Topic,
@@ -70,6 +89,7 @@ func New(ctx context.Context,
 				"duration_min": duration,
 				"rune_len":     runeLen,
 				"use_ssml":     task.UseSSML,
+				"prev_ending":  task.PrevEnding,
 			}, nil
 		})
 
@@ -94,6 +114,7 @@ func New(ctx context.Context,
 			task.AudioPath = path
 			return task, nil
 		})
+
 	branch := compose.NewGraphBranch(func(ctx context.Context, input map[string]any) (string, error) {
 		fmt.Printf("branch input use_ssml: %v\n", input["use_ssml"])
 		if input["use_ssml"].(bool) {
@@ -102,20 +123,44 @@ func New(ctx context.Context,
 		return "plain_script", nil
 	}, map[string]bool{"plain_script": true, "ssml_script": true})
 
+	saveEndingNode := compose.InvokableLambda(func(ctx context.Context, msg *schema.Message) (*schema.Message, error) {
+		task, _ := ctx.Value(ctxKeyChapterTask).(*ChapterTask)
+		if task == nil || task.FileRefID == "" {
+			return msg, nil
+		}
+
+		paragraphs := strings.Split(msg.Content, "\n\n")
+		var lastTwo []string
+		for i := len(paragraphs) - 1; i >= 0 && len(lastTwo) < 2; i-- {
+			p := strings.TrimSpace(paragraphs[i])
+			if p != "" {
+				lastTwo = append([]string{p}, lastTwo...)
+			}
+		}
+		if len(lastTwo) > 0 {
+			userID, _ := ctx.Value("userID").(string)
+			ending := strings.Join(lastTwo, "\n\n")
+			knowledgeBase.SaveChapterEnding(ctx, task.FileRefID, userID, task.ChapterInt, ending)
+		}
+		return msg, nil
+	})
+
 	g := compose.NewGraph[*ChapterTask, *ChapterTask]()
 	g.AddLambdaNode("search", searchNode, compose.WithNodeName("pipeline_search"))
 	g.AddLambdaNode("prepare", prepareNode, compose.WithNodeName("pipeline_prepare"))
 	g.AddGraphNode("plain_script", plainChain, compose.WithNodeName("pipeline_plain_script"))
 	g.AddGraphNode("ssml_script", ssmlChain, compose.WithNodeName("pipeline_ssml_script"))
-	//g.AddGraphNode("script", scriptRunnable, compose.WithNodeName("pipeline_script"))
 	g.AddLambdaNode("extract", extractNode, compose.WithNodeName("pipeline_extract"))
 	g.AddLambdaNode("tts", ttsNode, compose.WithNodeName("pipeline_tts"))
+	g.AddLambdaNode("save_ending", saveEndingNode, compose.WithNodeName("pipeline_save_ending"))
 
 	g.AddEdge(compose.START, "search")
 	g.AddEdge("search", "prepare")
 	g.AddBranch("prepare", branch)
 	g.AddEdge("plain_script", "extract")
-	g.AddEdge("ssml_script", "extract")
+	g.AddEdge("plain_script", "save_ending") // script → save_ending
+	g.AddEdge("ssml_script", "save_ending")
+	g.AddEdge("save_ending", "extract") // save_ending → extract
 	g.AddEdge("extract", "tts")
 	g.AddEdge("tts", compose.END)
 
@@ -125,38 +170,6 @@ func New(ctx context.Context,
 	}
 	return &Pipeline{runnable: runnable, tc: ttsClient, outDir: audioDir, kb: knowledgeBase}, nil
 }
-
-// func (p *Pipeline) ProcessChapter(
-// 	ctx context.Context,
-// 	task *ChapterTask,
-// 	bookName string,
-// 	eventCh chan *adk.AgentEvent) (*ChapterTask, error) {
-
-// 	ctx = context.WithValue(ctx, ctxKeyChapterTask, task)
-// 	ctx = context.WithValue(ctx, "eventCh", eventCh)
-
-// 	optPrepareNode := compose.WithCallbacks(
-// 		callbacks.NewHandlerBuilder().
-// 			OnStartFn(onPrepareNodeStart(eventCh)).
-// 			OnEndFn(onPrepareNodeEnd(eventCh)).
-// 			Build(),
-// 	).DesignateNode("prepare")
-
-// 	optSerchaeNode := compose.WithCallbacks(
-// 		callbacks.NewHandlerBuilder().
-// 			OnStartFn(onSearchNodeStart(bookName, eventCh)).
-// 			OnEndFn(onSearchNodeEnd(bookName, eventCh)).
-// 			Build(),
-// 	).DesignateNode("search")
-
-// 	optNestedChatMode := compose.WithCallbacks(
-// 		callbacks.NewHandlerBuilder().
-// 			OnStartFn(onSubChatModeNodeStart(eventCh)).
-// 			OnEndFn(onSubChatModeNodeEnd(eventCh)).
-// 			Build(),
-// 	).DesignateNodeWithPath(compose.NewNodePath("script", "sub_pipeline_chatMode"))
-// 	return p.runnable.Invoke(ctx, task, optPrepareNode, optSerchaeNode, optNestedChatMode)
-// }
 
 func (p *Pipeline) ProcessChapterStream(
 	ctx context.Context,
@@ -233,6 +246,7 @@ func ProcessBook(ctx context.Context,
 			FileRefID:     fileRefID,
 			UseSSML:       useSSML,
 			TotalChapters: len(chapters),
+			ChapterInt:    ch.ChapterInt,
 		}
 		var result *ChapterTask
 		reader, err := p.ProcessChapterStream(ctx, task, bookName, eventCh)
@@ -301,8 +315,12 @@ func onSearchNodeEnd(
 		}
 		ct := output.(*ChapterTask)
 		task, _ := ctx.Value(ctxKeyChapterTask).(*ChapterTask)
-		pushEvent(eventCh, "完成第%d章的知识库搜索\n搜索关键:%s\nfileRefID:%s\n书名:%s\n搜索结果:%s\n",
-			task.ChapterIdx, ct.Topic, ct.FileRefID, bookName, trunc(ct.Content, 100))
+		searchType := "模糊查询"
+		if ct.IsExactSerach {
+			searchType = "精确查询"
+		}
+		pushEvent(eventCh, "完成第%d章的知识库搜索\n搜索关键:%s\nfileRefID:%s\n书名:%s\n搜索类型:%s\n搜索结果:%s\n",
+			task.ChapterIdx, ct.Topic, ct.FileRefID, bookName, searchType, trunc(ct.Content, 100))
 		return ctx
 	}
 }
@@ -401,4 +419,10 @@ func duration2RuneLen(duration int, style string) int {
 		speed = 250
 	}
 	return speed * duration
+}
+
+var chapterTitleRegex = regexp.MustCompile(`第[一二三四五六七八九十百零\d]+[回章节部集话]`)
+
+func isChapterTitle(s string) bool {
+	return chapterTitleRegex.MatchString(s)
 }
