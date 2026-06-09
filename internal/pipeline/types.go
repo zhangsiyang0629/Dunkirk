@@ -5,6 +5,7 @@ type ChapterTask struct {
 	Style         string
 	DurationMin   int
 	ChapterIdx    int
+	ChapterInt    int
 	TotalChapters int
 	Content       string
 	Script        string
@@ -12,6 +13,8 @@ type ChapterTask struct {
 	FileRefID     string
 	Error         string
 	UseSSML       bool
+	PrevEnding    string
+	IsExactSerach bool
 }
 
 const (

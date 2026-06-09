@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/cloudwego/eino-ext/components/embedding/ark"
@@ -152,6 +154,8 @@ func createIndex(ctx context.Context, rdb *redis.Client, indexName, keyPrefix st
 		{FieldName: "user_id", FieldType: redis.SearchFieldTypeTag},
 		{FieldName: "visibility", FieldType: redis.SearchFieldTypeTag},
 		{FieldName: "book_ref", FieldType: redis.SearchFieldTypeTag},
+		{FieldName: "title", FieldType: redis.SearchFieldTypeTag},
+		{FieldName: "segment_index", FieldType: redis.SearchFieldTypeNumeric},
 	}
 
 	_, err = rdb.FTCreate(ctx, indexName, &redis.FTCreateOptions{
@@ -358,6 +362,7 @@ func (kb *KnowledgeBase) UpdateBookNameRefFilePath(ctx context.Context,
 func (kb *KnowledgeBase) ResolveBookName(ctx context.Context, userID, bookName string) (string, error) {
 	key := fmt.Sprintf("%s%s:%s", bookIndexPrefix, bookName, userID)
 	exists, err := kb.redisClient.Exists(ctx, key).Result()
+	fmt.Println("exists------", exists, key, err)
 	if err != nil {
 		return "", fmt.Errorf("check exists failed: %w", err)
 	}
@@ -365,6 +370,9 @@ func (kb *KnowledgeBase) ResolveBookName(ctx context.Context, userID, bookName s
 		res, err := kb.FindPublicBookUids(ctx, bookName)
 		if err != nil {
 			return "", fmt.Errorf("find public book UIDs failed: %w", err)
+		}
+		if len(res) == 0 {
+			return "", nil
 		}
 		return res[0], nil
 	}
@@ -374,6 +382,74 @@ func (kb *KnowledgeBase) ResolveBookName(ctx context.Context, userID, bookName s
 		return "", fmt.Errorf("HGetAll failed: %w", err)
 	}
 	return fields["refID"], nil
+}
+
+func (kb *KnowledgeBase) SaveChapterEnding(
+	ctx context.Context, userID, bookRef string, chapterIdx int, ending string) error {
+	key := fmt.Sprintf("chapter_ending:%s:%s:%d", bookRef, userID, chapterIdx)
+	return kb.redisClient.Set(ctx, key, ending, 0).Err()
+}
+
+func (kb *KnowledgeBase) GetChapterEnding(
+	ctx context.Context, userID, bookRef string, chapterIdx int) (string, error) {
+	key := fmt.Sprintf("chapter_ending:%s:%s:%d", bookRef, userID, chapterIdx)
+	data, err := kb.redisClient.Get(ctx, key).Bytes()
+	if err == redis.Nil {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	return string(data), nil
+}
+
+func (kb *KnowledgeBase) DeleteChapterEndings(ctx context.Context, userID, bookRef string) error {
+	var cursor uint64
+	for {
+		keys, next, err := kb.redisClient.Scan(ctx, cursor, fmt.Sprintf("chapter_ending:%s:%s:*", bookRef, userID), 100).Result()
+		if err != nil {
+			return err
+		}
+		if len(keys) > 0 {
+			kb.redisClient.Del(ctx, keys...)
+		}
+		cursor = next
+		if cursor == 0 {
+			break
+		}
+	}
+	return nil
+}
+
+func (kb *KnowledgeBase) GetChapterSegments(ctx context.Context, bookRef, title string) (string, error) {
+	filter := fmt.Sprintf("@book_ref:{%s} @title:{%s}", bookRef, title)
+	type segData struct {
+		content string
+		idx     int
+	}
+	var segments []segData
+
+	for _, idxName := range []string{publicIndex, privateIndex} {
+		result, err := kb.redisClient.FTSearchWithArgs(
+			ctx, idxName, filter, &redis.FTSearchOptions{Limit: 200}).Result()
+		if err != nil {
+			continue
+		}
+		for _, doc := range result.Docs {
+			segIdx, _ := strconv.Atoi(doc.Fields["segment_index"])
+			segments = append(segments, segData{content: doc.Fields["content"], idx: segIdx})
+		}
+	}
+
+	sort.Slice(segments, func(i, j int) bool {
+		return segments[i].idx < segments[j].idx
+	})
+
+	var parts []string
+	for _, s := range segments {
+		parts = append(parts, s.content)
+	}
+	return strings.Join(parts, "\n\n"), nil
 }
 
 func escapeText(s string) string {

@@ -17,7 +17,7 @@ func TestSearch(t *testing.T) {
 		t.Fatalf("init kb: %v", err)
 	}
 	defer knowledgeBase.Close()
-	relatedDocs, err := knowledgeBase.Search(ctx, "草船借箭", 2, "anonymous", "72563291")
+	relatedDocs, err := knowledgeBase.Search(ctx, "第二回　张翼德怒鞭督邮　何国舅谋诛宦竖", 5, "anonymous", "72563291")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -25,6 +25,21 @@ func TestSearch(t *testing.T) {
 		title, _ := d.MetaData["title"].(string)
 		t.Logf("找到相关文档: %s, %s", title, d.Content)
 	}
+}
+
+func TestGetChapterSegments(t *testing.T) {
+	ctx := context.Background()
+	cfg := config.Load()
+	knowledgeBase, err := New(ctx, cfg)
+	if err != nil {
+		t.Fatalf("init kb: %v", err)
+	}
+	defer knowledgeBase.Close()
+	relatedDocs, err := knowledgeBase.GetChapterSegments(ctx, "75eb95dc", "第九回　除暴凶吕布助司徒　犯长安李傕听贾诩")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("章节内容: %s", relatedDocs)
 }
 
 func TestFindBook(t *testing.T) {
