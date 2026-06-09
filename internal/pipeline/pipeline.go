@@ -4,14 +4,15 @@ import (
 	"context"
 	"dunkirk/internal/docproc"
 	"dunkirk/internal/kb"
+	"dunkirk/internal/script"
 	"dunkirk/internal/tts"
 	"errors"
 	"fmt"
 	"io"
 	"log"
-	"os"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/cloudwego/eino/adk"
 	"github.com/cloudwego/eino/callbacks"
@@ -20,22 +21,28 @@ import (
 	"github.com/cloudwego/eino/schema"
 )
 
+func init() {
+	schema.Register[*ChapterTask]()
+}
+
 type ctxKeyType struct{}
 
 var ctxKeyChapterTask = ctxKeyType{}
 
 type Pipeline struct {
-	runnable compose.Runnable[*ChapterTask, *ChapterTask]
-	kb       *kb.KnowledgeBase
-	tc       tts.TTSProvider
-	outDir   string
+	runnable    compose.Runnable[*ChapterTask, *ChapterTask]
+	kb          *kb.KnowledgeBase
+	tc          tts.TTSProvider
+	outDir      string
+	scriptStore *script.Store
 }
 
 func New(ctx context.Context,
 	knowledgeBase *kb.KnowledgeBase,
 	chatModel model.BaseChatModel,
 	ttsClient tts.TTSProvider,
-	audioDir string) (*Pipeline, error) {
+	audioDir string,
+	scriptStore *script.Store) (*Pipeline, error) {
 	streamingMode := &streamingModel{BaseChatModel: chatModel}
 	//ssmlRender := NewEdgeRenderer()
 	// scriptRunnable := newScriptChain(ctx, streamingMode, ssmlRender)
@@ -105,7 +112,9 @@ func New(ctx context.Context,
 
 	ttsNode := compose.InvokableLambda(
 		func(ctx context.Context, task *ChapterTask) (*ChapterTask, error) {
-			//filename := fmt.Sprintf("chapter_%d", task.ChapterIdx)
+			if task.Error != "" {
+				return task, nil // 审核未通过，跳过 TTS
+			}
 			userID, _ := ctx.Value("userID").(string)
 			path, err := ttsClient.TextToSpeech(ctx, task.Script, task.Topic, userID)
 			if err != nil {
@@ -145,6 +154,43 @@ func New(ctx context.Context,
 		return msg, nil
 	})
 
+	approvalNode := compose.InvokableLambda(func(ctx context.Context, task *ChapterTask) (*ChapterTask, error) {
+		wasInterrupted, tmp, interruptedState := compose.GetInterruptState[*ChapterTask](ctx)
+		fmt.Printf("========wasInterrupted:%v, tmp:%v\n", wasInterrupted, tmp)
+		if !wasInterrupted {
+			return nil, compose.StatefulInterrupt(ctx, map[string]any{
+				"question":       "请审核以下脚本",
+				"options":        []string{"同意", "拒绝", "拒绝但保留脚本"},
+				"type":           "script_review",
+				"script_preview": task.Script,
+			}, task)
+		}
+		userID, _ := ctx.Value("userID").(string)
+		isTarget, hasData, data := compose.GetResumeContext[string](ctx)
+		task = interruptedState
+		fmt.Printf("========isTarget:%v, hasData:%v, data:%v\n", isTarget, hasData, data)
+		if isTarget && hasData {
+			switch data {
+			case "同意":
+				scriptStore.Save(ctx, userID, task.FileRefID, task.Topic, task.Script)
+				return task, nil
+			case "拒绝":
+				task.Error = "脚本审核未通过"
+				return task, nil
+			case "拒绝但保留脚本":
+				scriptStore.Save(ctx, userID, task.FileRefID, task.Topic, task.Script)
+				task.Error = "脚本审核未通过（已保留）"
+				return task, nil
+			}
+		}
+		return nil, compose.StatefulInterrupt(ctx, map[string]any{
+			"question":       "请审核以下脚本",
+			"options":        []string{"同意", "拒绝", "拒绝但保留脚本"},
+			"type":           "script_review",
+			"script_preview": task.Script,
+		}, *task)
+	})
+
 	g := compose.NewGraph[*ChapterTask, *ChapterTask]()
 	g.AddLambdaNode("search", searchNode, compose.WithNodeName("pipeline_search"))
 	g.AddLambdaNode("prepare", prepareNode, compose.WithNodeName("pipeline_prepare"))
@@ -153,22 +199,24 @@ func New(ctx context.Context,
 	g.AddLambdaNode("extract", extractNode, compose.WithNodeName("pipeline_extract"))
 	g.AddLambdaNode("tts", ttsNode, compose.WithNodeName("pipeline_tts"))
 	g.AddLambdaNode("save_ending", saveEndingNode, compose.WithNodeName("pipeline_save_ending"))
+	g.AddLambdaNode("approval", approvalNode, compose.WithNodeName("pipeline_approval"))
 
 	g.AddEdge(compose.START, "search")
 	g.AddEdge("search", "prepare")
 	g.AddBranch("prepare", branch)
-	g.AddEdge("plain_script", "extract")
 	g.AddEdge("plain_script", "save_ending") // script → save_ending
 	g.AddEdge("ssml_script", "save_ending")
 	g.AddEdge("save_ending", "extract") // save_ending → extract
-	g.AddEdge("extract", "tts")
+	g.AddEdge("extract", "approval")
+	g.AddEdge("approval", "tts")
 	g.AddEdge("tts", compose.END)
 
-	runnable, err := g.Compile(ctx)
+	runnable, err := g.Compile(ctx, compose.WithCheckPointStore(newInMemoryStore()))
 	if err != nil {
 		return nil, fmt.Errorf("compile graph: %w", err)
 	}
-	return &Pipeline{runnable: runnable, tc: ttsClient, outDir: audioDir, kb: knowledgeBase}, nil
+	return &Pipeline{runnable: runnable, tc: ttsClient, outDir: audioDir,
+		kb: knowledgeBase, scriptStore: scriptStore}, nil
 }
 
 func (p *Pipeline) ProcessChapterStream(
@@ -208,7 +256,8 @@ func (p *Pipeline) ProcessChapterStream(
 			OnEndFn(onSubChatModeNodeEnd(eventCh)).
 			Build(),
 	).DesignateNodeWithPath(compose.NewNodePath("ssml_script", "sub_pipeline_ssml_chatMode"))
-	return p.runnable.Stream(ctx, task, optPrepareNode, optSerchaeNode, optNestedChatMode1, optNestedChatMode2)
+	return p.runnable.Stream(ctx, task, optPrepareNode, optSerchaeNode,
+		optNestedChatMode1, optNestedChatMode2, compose.WithCheckPointID(task.CheckpointID))
 }
 
 func ProcessBook(ctx context.Context,
@@ -217,7 +266,9 @@ func ProcessBook(ctx context.Context,
 	durationMin int,
 	chapters []int,
 	eventCh chan *adk.AgentEvent,
-	useSSML bool) ([]*ChapterTask, error) {
+	useSSML bool,
+	checkpointID string,
+	resumeCh chan string) ([]*ChapterTask, error) {
 
 	allChapters, err := docproc.GetBriefChapters(ctx, p.kb, fileRefID)
 	if err != nil {
@@ -247,48 +298,110 @@ func ProcessBook(ctx context.Context,
 			UseSSML:       useSSML,
 			TotalChapters: len(chapters),
 			ChapterInt:    ch.ChapterInt,
+			CheckpointID:  checkpointID,
 		}
-		var result *ChapterTask
-		reader, err := p.ProcessChapterStream(ctx, task, bookName, eventCh)
+		log.Printf("[ProcessBook] processing chapter %d/%d", i+1, len(targets))
+		result, err := readChapter(ctx, p, task, bookName, eventCh, resumeCh)
 		if err != nil {
-			result = task
-			result.Error = err.Error()
-			pushEvent(eventCh, "第%d章失败: %s", result.ChapterIdx, err.Error())
+			pushEvent(eventCh, "第%d章失败: %v", ch.ChapterInt, err)
+			log.Printf("[ERROR]chapter %d/%d failed: %s", task.ChapterIdx, len(chapters), err)
 			continue
 		}
-		defer reader.Close()
-		for {
-			frame, err := reader.Recv()
-			if errors.Is(err, io.EOF) {
-				break
-			}
-			if err != nil {
-				_, _ = fmt.Fprintln(os.Stderr, err)
-				log.Printf("[ERROR]ProcessChapterStream error:%v", err)
 
-			}
-			if frame != nil {
-				result = frame
-			}
+		if result.Error != "" {
+			pushEvent(eventCh, "第%d章已跳过: %s", ch.ChapterInt, result.Error)
+			log.Printf("[ERROR]chapter %d/%d failed: %s", result.ChapterIdx, len(chapters), result.Error)
+			continue
 		}
-		//result, err := p.ProcessChapter(ctx, task, bookName, eventCh)
-		//var msg string
-		// if err != nil {
-		// 	result = task
-		// 	result.Error = err.Error()
-		// 	msg = fmt.Sprintf("第%d章失败: %s", result.ChapterIdx, err.Error())
-		// }
-		if result != nil {
-			pushEvent(eventCh, "\n第%d章完成: %s\n", ch.ChapterInt, result.AudioPath)
-			results = append(results, result)
-			log.Printf("chapter %d/%d done: %s", ch.ChapterInt, len(chapters), result.AudioPath)
-		} else {
-			pushEvent(eventCh, "\n第%d章失败\n", ch.ChapterInt)
-			log.Printf("[ERROR]chapter %d/%d failed", ch.ChapterInt, len(chapters))
-		}
-
+		pushEvent(eventCh, "\n第%d章完成: %s\n", ch.ChapterInt, result.AudioPath)
+		log.Printf("chapter %d/%d done: %s", ch.ChapterInt, len(chapters), result.AudioPath)
+		results = append(results, result)
 	}
 	return results, nil
+}
+
+func resumeChapter(ctx context.Context, p *Pipeline, checkPoint string) (*ChapterTask, error) {
+	reader, err := p.runnable.Stream(ctx, nil, compose.WithCheckPointID(checkPoint))
+	if err != nil {
+		return nil, err
+	}
+	defer reader.Close()
+
+	var task *ChapterTask
+	for {
+		frame, rErr := reader.Recv()
+		if errors.Is(rErr, io.EOF) {
+			break
+		}
+		if rErr != nil {
+			return nil, rErr
+		}
+		if frame != nil {
+			task = frame
+		}
+	}
+	return task, nil
+}
+
+func readChapter(ctx context.Context, p *Pipeline, task *ChapterTask, bookName string,
+	eventCh chan *adk.AgentEvent, resumeCh chan string) (*ChapterTask, error) {
+
+	log.Printf("[readChapter] ENTER: task.CheckpointID=%s", task.CheckpointID)
+	reader, err := p.ProcessChapterStream(ctx, task, bookName, eventCh)
+	if err != nil {
+		if info, ok := compose.ExtractInterruptInfo(err); ok && len(info.InterruptContexts) > 0 {
+			pushInterrupt(eventCh, info.InterruptContexts)
+			if reader != nil {
+				reader.Close()
+			}
+
+			var choice string
+			select {
+			case choice = <-resumeCh:
+			case <-time.After(10 * time.Minute):
+				choice = "审核超时"
+			}
+			ctx = compose.BatchResumeWithData(ctx, map[string]any{
+				info.InterruptContexts[0].ID: choice,
+			})
+			return readChapter(ctx, p, task, bookName, eventCh, resumeCh)
+			//return resumeChapter(ctx, p, task.CheckpointID)
+			//return p.runnable.Invoke(ctx, task, compose.WithCheckPointID(task.CheckpointID))
+
+			// switch choice {
+			// case "同意":
+			// 	ctx = compose.BatchResumeWithData(ctx, map[string]any{
+			// 		info.InterruptContexts[0].ID: "同意",
+			// 	})
+			// 	return readChapter(ctx, p, task, bookName, eventCh, resumeCh)
+			// case "拒绝":
+			// 	task.Error = "审核未通过"
+			// 	return task, nil
+			// case "拒绝但保留脚本":
+			// 	task.Error = "审核未通过（已保留）"
+			// 	return task, nil
+			// default:
+			// 	task.Error = "审核超时"
+			// 	return task, nil
+			// }
+		}
+		return task, err
+	}
+	defer reader.Close()
+
+	for {
+		frame, rErr := reader.Recv()
+		if errors.Is(rErr, io.EOF) {
+			break
+		}
+		if rErr != nil {
+			return nil, rErr
+		}
+		if frame != nil {
+			task = frame
+		}
+	}
+	return task, nil
 }
 
 func onSearchNodeStart(

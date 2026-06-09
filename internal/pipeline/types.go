@@ -15,6 +15,7 @@ type ChapterTask struct {
 	UseSSML       bool
 	PrevEnding    string
 	IsExactSerach bool
+	CheckpointID  string
 }
 
 const (

@@ -11,6 +11,7 @@ import (
 	"github.com/alecthomas/assert"
 	"github.com/cloudwego/eino-ext/components/model/ark"
 	"github.com/cloudwego/eino/compose"
+	"github.com/redis/go-redis/v9"
 )
 
 func TestIntentParse(t *testing.T) {
@@ -24,7 +25,13 @@ func TestIntentParse(t *testing.T) {
 		t.Fatalf("new chat model: %v", err)
 	}
 
-	knowledgeBase, err := kb.New(ctx, cfg)
+	rdb := redis.NewClient(&redis.Options{
+		Addr:          cfg.RedisAddr,
+		Protocol:      2,
+		UnstableResp3: true,
+	})
+
+	knowledgeBase, err := kb.New(ctx, cfg, rdb)
 	if err != nil {
 		log.Fatalf("init kb: %v", err)
 	}
@@ -54,7 +61,13 @@ func TestBookInterrup(t *testing.T) {
 		t.Fatalf("new chat model: %v", err)
 	}
 
-	knowledgeBase, err := kb.New(ctx, cfg)
+	rdb := redis.NewClient(&redis.Options{
+		Addr:          cfg.RedisAddr,
+		Protocol:      2,
+		UnstableResp3: true,
+	})
+
+	knowledgeBase, err := kb.New(ctx, cfg, rdb)
 	if err != nil {
 		log.Fatalf("init kb: %v", err)
 	}
@@ -100,7 +113,13 @@ func TestGenerateGiveUpInterrup(t *testing.T) {
 		t.Fatalf("new chat model: %v", err)
 	}
 
-	knowledgeBase, err := kb.New(ctx, cfg)
+	rdb := redis.NewClient(&redis.Options{
+		Addr:          cfg.RedisAddr,
+		Protocol:      2,
+		UnstableResp3: true,
+	})
+
+	knowledgeBase, err := kb.New(ctx, cfg, rdb)
 	if err != nil {
 		log.Fatalf("init kb: %v", err)
 	}
@@ -146,7 +165,12 @@ func TestGenerateGenerateInterrup(t *testing.T) {
 		t.Fatalf("new chat model: %v", err)
 	}
 
-	knowledgeBase, err := kb.New(ctx, cfg)
+	rdb := redis.NewClient(&redis.Options{
+		Addr:          cfg.RedisAddr,
+		Protocol:      2,
+		UnstableResp3: true,
+	})
+	knowledgeBase, err := kb.New(ctx, cfg, rdb)
 	if err != nil {
 		log.Fatalf("init kb: %v", err)
 	}

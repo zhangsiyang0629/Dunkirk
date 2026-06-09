@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/google/uuid"
+	"github.com/redis/go-redis/v9"
 )
 
 func main() {
@@ -31,7 +32,13 @@ func main() {
 	}
 	defer file.Close()
 
-	knowledgeBase, err := kb.New(ctx, cfg)
+	rdb := redis.NewClient(&redis.Options{
+		Addr:          cfg.RedisAddr,
+		Protocol:      2,
+		UnstableResp3: true,
+	})
+
+	knowledgeBase, err := kb.New(ctx, cfg, rdb)
 	if err != nil {
 		log.Fatalf("init kb: %v", err)
 	}

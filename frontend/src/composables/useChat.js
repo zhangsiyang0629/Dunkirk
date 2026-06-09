@@ -4,7 +4,7 @@ export function useChat() {
     const isStreaming = ref(false)
     const pendingInterrupt = ref(null)
     function processSSE(event, data) {
-            switch (event) {
+        switch (event) {
             case 'intent':
                 messages.value.push({ id: Date.now(), type: 'intent', content: data.reasoning || '' })
                 break

@@ -7,12 +7,18 @@ import (
 	"log"
 
 	"github.com/gin-gonic/gin"
+	"github.com/redis/go-redis/v9"
 )
 
 func main() {
 	ctx := context.Background()
 	cfg := config.Load()
-	knowledgeBase, err := kb.New(ctx, cfg)
+	rdb := redis.NewClient(&redis.Options{
+		Addr:          cfg.RedisAddr,
+		Protocol:      2,
+		UnstableResp3: true,
+	})
+	knowledgeBase, err := kb.New(ctx, cfg, rdb)
 	if err != nil {
 		log.Fatalf("init knowledge base: %v", err)
 	}

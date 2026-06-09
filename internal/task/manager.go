@@ -29,6 +29,8 @@ type Task struct {
 	Intent       *pipeline.IntentResult
 	UserID       string
 	UseSSML      bool
+	ResumeCh     chan string // pipeline 阻塞等待用户审核结果
+	CheckpointID string      // 用于 Resume 端点的 sessionID
 }
 
 func (t *Task) NextEvent() (*adk.AgentEvent, bool) {
@@ -49,23 +51,6 @@ func NewManager(a *agent.Agent, p *pipeline.Pipeline) *Manager {
 		agent:    a,
 		pipeline: p,
 	}
-}
-
-func (m *Manager) CreateTask(input, style string, pipelineMode bool) *Task {
-	task := &Task{
-		ID:           uuid.New().String()[:8],
-		Status:       "pending",
-		CreatedAt:    time.Now(),
-		Input:        input,
-		Style:        style,
-		EventCh:      make(chan *adk.AgentEvent, 100),
-		done:         make(chan struct{}),
-		PipelineMode: pipelineMode,
-	}
-	m.mu.Lock()
-	m.tasks[task.ID] = task
-	m.mu.Unlock()
-	return task
 }
 
 func (m *Manager) GetTask(id string) (*Task, bool) {
@@ -129,7 +114,9 @@ func (m *Manager) runPipeline(ctx context.Context, task *Task) {
 		task.Intent.DurationMin,
 		task.Intent.Chapters,
 		task.EventCh,
-		task.UseSSML)
+		task.UseSSML,
+		task.CheckpointID,
+		task.ResumeCh)
 	if err != nil {
 		task.Error = err.Error()
 		task.Status = "failed"
@@ -160,9 +147,21 @@ func (m *Manager) CreateTaskFromIntent(
 		Intent:       intent,
 		EventCh:      make(chan *adk.AgentEvent, 100),
 		done:         make(chan struct{}),
+		ResumeCh:     make(chan string, 1),
 	}
 	m.mu.Lock()
 	m.tasks[task.ID] = task
 	m.mu.Unlock()
 	return task
+}
+
+func (m *Manager) GetTaskByCheckpointID(checkpointID string) (*Task, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for _, t := range m.tasks {
+		if t.CheckpointID == checkpointID {
+			return t, true
+		}
+	}
+	return nil, false
 }

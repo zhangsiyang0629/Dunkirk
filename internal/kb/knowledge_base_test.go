@@ -12,7 +12,13 @@ import (
 func TestSearch(t *testing.T) {
 	ctx := context.Background()
 	cfg := config.Load()
-	knowledgeBase, err := New(ctx, cfg)
+	rdb := redis.NewClient(&redis.Options{
+		Addr:          cfg.RedisAddr,
+		Protocol:      2,
+		UnstableResp3: true,
+	})
+
+	knowledgeBase, err := New(ctx, cfg, rdb)
 	if err != nil {
 		t.Fatalf("init kb: %v", err)
 	}
@@ -30,7 +36,14 @@ func TestSearch(t *testing.T) {
 func TestGetChapterSegments(t *testing.T) {
 	ctx := context.Background()
 	cfg := config.Load()
-	knowledgeBase, err := New(ctx, cfg)
+
+	rdb := redis.NewClient(&redis.Options{
+		Addr:          cfg.RedisAddr,
+		Protocol:      2,
+		UnstableResp3: true,
+	})
+
+	knowledgeBase, err := New(ctx, cfg, rdb)
 	if err != nil {
 		t.Fatalf("init kb: %v", err)
 	}
@@ -45,7 +58,14 @@ func TestGetChapterSegments(t *testing.T) {
 func TestFindBook(t *testing.T) {
 	ctx := context.Background()
 	cfg := config.Load()
-	knowledgeBase, err := New(ctx, cfg)
+
+	rdb := redis.NewClient(&redis.Options{
+		Addr:          cfg.RedisAddr,
+		Protocol:      2,
+		UnstableResp3: true,
+	})
+
+	knowledgeBase, err := New(ctx, cfg, rdb)
 	if err != nil {
 		t.Fatalf("init kb: %v", err)
 	}
@@ -74,6 +94,7 @@ func TestGetIndex(t *testing.T) {
 		Protocol:      2,
 		UnstableResp3: true,
 	})
+	defer rdb.Close()
 
 	res, err := rdb.FTInfo(ctx, "book_name_ref_index").Result()
 	if err != nil {
@@ -85,10 +106,18 @@ func TestGetIndex(t *testing.T) {
 func TestSearchDelete(t *testing.T) {
 	ctx := context.Background()
 	cfg := config.Load()
-	kb, err := New(ctx, cfg)
+
+	rdb := redis.NewClient(&redis.Options{
+		Addr:          cfg.RedisAddr,
+		Protocol:      2,
+		UnstableResp3: true,
+	})
+
+	kb, err := New(ctx, cfg, rdb)
 	if err != nil {
 		t.Fatalf("init kb: %v", err)
 	}
+	defer kb.Close()
 
 	userID := "anonymous_test"
 	for i := range 250 {
