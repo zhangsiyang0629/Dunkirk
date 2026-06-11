@@ -44,93 +44,37 @@ func New(ctx context.Context,
 	audioDir string,
 	scriptStore *script.Store) (*Pipeline, error) {
 	streamingMode := &streamingModel{BaseChatModel: chatModel}
-	//ssmlRender := NewEdgeRenderer()
-	// scriptRunnable := newScriptChain(ctx, streamingMode, ssmlRender)
+
 	plainChain := newPlainScriptChain(ctx, streamingMode)
 	ssmlChain := newSSMLScriptChain(ctx, streamingMode)
+	segPlainChain := newSegmentedScriptChain(ctx, streamingMode)
+
 	searchNode := compose.InvokableLambda(
 		func(ctx context.Context, task *ChapterTask) (*ChapterTask, error) {
-			userID, _ := ctx.Value("userID").(string)
-			// 优先按题目精确查询
-			if task.FileRefID != "" && isChapterTitle(task.Topic) {
-				content, err := knowledgeBase.GetChapterSegments(ctx, task.FileRefID, task.Topic)
-				if err != nil {
-					return nil, err
-				}
-				task.Content = content
-				task.IsExactSerach = true
-				return task, nil
-			}
-
-			docs, err := knowledgeBase.Search(ctx, task.Topic, 5, userID, task.FileRefID)
-			if err != nil {
-				return nil, err
-			}
-			var parts []string
-			for _, d := range docs {
-				parts = append(parts, d.Content)
-			}
-			task.Content = strings.Join(parts, "\n\n")
-			return task, nil
+			return searchNodeFunc(ctx, task, knowledgeBase)
 		})
 
 	prepareNode := compose.InvokableLambda(
 		func(ctx context.Context, task *ChapterTask) (map[string]any, error) {
-			duration := task.DurationMin
-			if duration == 0 {
-				duration = estimateDuration(len(task.Content), task.Style)
-				task.DurationMin = duration
-			}
-			runeLen := duration2RuneLen(duration, task.Style)
-
-			userID, _ := ctx.Value("userID").(string)
-			if task.FileRefID != "" && task.ChapterInt > 1 {
-				ending, _ := knowledgeBase.GetChapterEnding(ctx, userID, task.FileRefID, task.ChapterInt-1)
-				task.PrevEnding = ending
-			}
-
-			return map[string]any{
-				"content":      task.Content,
-				"topic":        task.Topic,
-				"style":        task.Style,
-				"duration_min": duration,
-				"rune_len":     runeLen,
-				"use_ssml":     task.UseSSML,
-				"prev_ending":  task.PrevEnding,
-			}, nil
+			return prepareNodeFunc(ctx, knowledgeBase, task)
 		})
 
-	extractNode := compose.InvokableLambda(
-		func(ctx context.Context, msg *schema.Message) (*ChapterTask, error) {
-			task, ok := ctx.Value(ctxKeyChapterTask).(*ChapterTask)
-			if !ok {
-				return nil, fmt.Errorf("task not found in context")
-			}
-			task.Script = msg.Content
-			return task, nil
-		})
+	extractNode := compose.InvokableLambda(extractNodeFunc)
 
 	ttsNode := compose.InvokableLambda(
 		func(ctx context.Context, task *ChapterTask) (*ChapterTask, error) {
-			if task.Error != "" {
-				return task, nil // 审核未通过，跳过 TTS
-			}
-			userID, _ := ctx.Value("userID").(string)
-			path, err := ttsClient.TextToSpeech(ctx, task.Script, task.Topic, userID)
-			if err != nil {
-				return nil, err
-			}
-			task.AudioPath = path
-			return task, nil
+			return ttsNodeFunc(ctx, task, ttsClient)
 		})
 
 	branch := compose.NewGraphBranch(func(ctx context.Context, input map[string]any) (string, error) {
-		fmt.Printf("branch input use_ssml: %v\n", input["use_ssml"])
+		if input["duration_min"].(int) == 0 {
+			return "seg_plain_script", nil
+		}
 		if input["use_ssml"].(bool) {
 			return "ssml_script", nil
 		}
 		return "plain_script", nil
-	}, map[string]bool{"plain_script": true, "ssml_script": true})
+	}, map[string]bool{"plain_script": true, "ssml_script": true, "seg_plain_script": true})
 
 	saveEndingNode := compose.InvokableLambda(func(ctx context.Context, msg *schema.Message) (*schema.Message, error) {
 		task, _ := ctx.Value(ctxKeyChapterTask).(*ChapterTask)
@@ -155,20 +99,18 @@ func New(ctx context.Context,
 	})
 
 	approvalNode := compose.InvokableLambda(func(ctx context.Context, task *ChapterTask) (*ChapterTask, error) {
-		wasInterrupted, tmp, interruptedState := compose.GetInterruptState[*ChapterTask](ctx)
-		fmt.Printf("========wasInterrupted:%v, tmp:%v\n", wasInterrupted, tmp)
+		wasInterrupted, _, interruptedState := compose.GetInterruptState[*ChapterTask](ctx)
 		if !wasInterrupted {
 			return nil, compose.StatefulInterrupt(ctx, map[string]any{
-				"question":       "请审核以下脚本",
-				"options":        []string{"同意", "拒绝", "拒绝但保留脚本"},
-				"type":           "script_review",
-				"script_preview": task.Script,
+				"question": "请审核以下脚本",
+				"options":  []string{"同意", "拒绝", "拒绝但保留脚本"},
+				"type":     "script_review",
+				//"script_preview": task.Script,
 			}, task)
 		}
 		userID, _ := ctx.Value("userID").(string)
 		isTarget, hasData, data := compose.GetResumeContext[string](ctx)
 		task = interruptedState
-		fmt.Printf("========isTarget:%v, hasData:%v, data:%v\n", isTarget, hasData, data)
 		if isTarget && hasData {
 			switch data {
 			case "同意":
@@ -179,15 +121,19 @@ func New(ctx context.Context,
 				return task, nil
 			case "拒绝但保留脚本":
 				scriptStore.Save(ctx, userID, task.FileRefID, task.Topic, task.Script)
-				task.Error = "脚本审核未通过（已保留）"
+				task.Error = "脚本审核未通过（脚本文案已保留）"
+				return task, nil
+			case "审核超时":
+				scriptStore.Save(ctx, userID, task.FileRefID, task.Topic, task.Script)
+				task.Error = "审核超时，拒绝生成（脚本文案已保留）"
 				return task, nil
 			}
 		}
 		return nil, compose.StatefulInterrupt(ctx, map[string]any{
-			"question":       "请审核以下脚本",
-			"options":        []string{"同意", "拒绝", "拒绝但保留脚本"},
-			"type":           "script_review",
-			"script_preview": task.Script,
+			"question": "请审核以下脚本",
+			"options":  []string{"同意", "拒绝", "拒绝但保留脚本"},
+			"type":     "script_review",
+			//"script_preview": task.Script,
 		}, *task)
 	})
 
@@ -195,6 +141,7 @@ func New(ctx context.Context,
 	g.AddLambdaNode("search", searchNode, compose.WithNodeName("pipeline_search"))
 	g.AddLambdaNode("prepare", prepareNode, compose.WithNodeName("pipeline_prepare"))
 	g.AddGraphNode("plain_script", plainChain, compose.WithNodeName("pipeline_plain_script"))
+	g.AddGraphNode("seg_plain_script", segPlainChain, compose.WithNodeName("pipeline_seg_plain_script"))
 	g.AddGraphNode("ssml_script", ssmlChain, compose.WithNodeName("pipeline_ssml_script"))
 	g.AddLambdaNode("extract", extractNode, compose.WithNodeName("pipeline_extract"))
 	g.AddLambdaNode("tts", ttsNode, compose.WithNodeName("pipeline_tts"))
@@ -206,6 +153,7 @@ func New(ctx context.Context,
 	g.AddBranch("prepare", branch)
 	g.AddEdge("plain_script", "save_ending") // script → save_ending
 	g.AddEdge("ssml_script", "save_ending")
+	g.AddEdge("seg_plain_script", "save_ending")
 	g.AddEdge("save_ending", "extract") // save_ending → extract
 	g.AddEdge("extract", "approval")
 	g.AddEdge("approval", "tts")
@@ -256,8 +204,15 @@ func (p *Pipeline) ProcessChapterStream(
 			OnEndFn(onSubChatModeNodeEnd(eventCh)).
 			Build(),
 	).DesignateNodeWithPath(compose.NewNodePath("ssml_script", "sub_pipeline_ssml_chatMode"))
-	return p.runnable.Stream(ctx, task, optPrepareNode, optSerchaeNode,
-		optNestedChatMode1, optNestedChatMode2, compose.WithCheckPointID(task.CheckpointID))
+
+	return p.runnable.Stream(
+		ctx,
+		task,
+		optPrepareNode,
+		optSerchaeNode,
+		optNestedChatMode1,
+		optNestedChatMode2,
+		compose.WithCheckPointID(task.CheckpointID))
 }
 
 func ProcessBook(ctx context.Context,
@@ -313,34 +268,19 @@ func ProcessBook(ctx context.Context,
 			log.Printf("[ERROR]chapter %d/%d failed: %s", result.ChapterIdx, len(chapters), result.Error)
 			continue
 		}
-		pushEvent(eventCh, "\n第%d章完成: %s\n", ch.ChapterInt, result.AudioPath)
+
+		if len(result.AudioPaths) > 1 {
+			pushEvent(eventCh, "第%d章完成，共%d集", ch.ChapterInt, len(result.AudioPaths))
+			for i, path := range result.AudioPaths {
+				pushEvent(eventCh, "  第%d集: %s", i+1, path)
+			}
+		} else {
+			pushEvent(eventCh, "\n第%d章完成: %s\n", ch.ChapterInt, result.AudioPath)
+		}
 		log.Printf("chapter %d/%d done: %s", ch.ChapterInt, len(chapters), result.AudioPath)
 		results = append(results, result)
 	}
 	return results, nil
-}
-
-func resumeChapter(ctx context.Context, p *Pipeline, checkPoint string) (*ChapterTask, error) {
-	reader, err := p.runnable.Stream(ctx, nil, compose.WithCheckPointID(checkPoint))
-	if err != nil {
-		return nil, err
-	}
-	defer reader.Close()
-
-	var task *ChapterTask
-	for {
-		frame, rErr := reader.Recv()
-		if errors.Is(rErr, io.EOF) {
-			break
-		}
-		if rErr != nil {
-			return nil, rErr
-		}
-		if frame != nil {
-			task = frame
-		}
-	}
-	return task, nil
 }
 
 func readChapter(ctx context.Context, p *Pipeline, task *ChapterTask, bookName string,
@@ -365,25 +305,6 @@ func readChapter(ctx context.Context, p *Pipeline, task *ChapterTask, bookName s
 				info.InterruptContexts[0].ID: choice,
 			})
 			return readChapter(ctx, p, task, bookName, eventCh, resumeCh)
-			//return resumeChapter(ctx, p, task.CheckpointID)
-			//return p.runnable.Invoke(ctx, task, compose.WithCheckPointID(task.CheckpointID))
-
-			// switch choice {
-			// case "同意":
-			// 	ctx = compose.BatchResumeWithData(ctx, map[string]any{
-			// 		info.InterruptContexts[0].ID: "同意",
-			// 	})
-			// 	return readChapter(ctx, p, task, bookName, eventCh, resumeCh)
-			// case "拒绝":
-			// 	task.Error = "审核未通过"
-			// 	return task, nil
-			// case "拒绝但保留脚本":
-			// 	task.Error = "审核未通过（已保留）"
-			// 	return task, nil
-			// default:
-			// 	task.Error = "审核超时"
-			// 	return task, nil
-			// }
 		}
 		return task, err
 	}
@@ -401,6 +322,112 @@ func readChapter(ctx context.Context, p *Pipeline, task *ChapterTask, bookName s
 			task = frame
 		}
 	}
+	return task, nil
+}
+
+func searchNodeFunc(
+	ctx context.Context,
+	task *ChapterTask,
+	knowledgeBase *kb.KnowledgeBase) (*ChapterTask, error) {
+
+	userID, _ := ctx.Value("userID").(string)
+	// 优先按题目精确查询
+	if task.FileRefID != "" && isChapterTitle(task.Topic) {
+		content, err := knowledgeBase.GetChapterSegments(ctx, task.FileRefID, task.Topic)
+		if err != nil {
+			return nil, err
+		}
+		task.Content = content
+		task.IsExactSerach = true
+		return task, nil
+	}
+
+	docs, err := knowledgeBase.Search(ctx, task.Topic, 5, userID, task.FileRefID)
+	if err != nil {
+		return nil, err
+	}
+	var parts []string
+	for _, d := range docs {
+		parts = append(parts, d.Content)
+	}
+	task.Content = strings.Join(parts, "\n\n")
+	return task, nil
+}
+
+func prepareNodeFunc(ctx context.Context, knowledgeBase *kb.KnowledgeBase, task *ChapterTask) (map[string]any, error) {
+	duration := task.DurationMin
+	// if duration == 0 {
+	// 	duration = estimateDuration(len(task.Content), task.Style)
+	// 	task.DurationMin = duration
+	// }
+	runeLen := duration2RuneLen(duration, task.Style)
+
+	userID, _ := ctx.Value("userID").(string)
+	if task.FileRefID != "" && task.ChapterInt > 1 {
+		ending, _ := knowledgeBase.GetChapterEnding(ctx, userID, task.FileRefID, task.ChapterInt-1)
+		task.PrevEnding = ending
+	}
+
+	return map[string]any{
+		"content":       task.Content,
+		"topic":         task.Topic,
+		"style":         task.Style,
+		"duration_min":  duration,
+		"rune_len":      runeLen,
+		"use_ssml":      task.UseSSML,
+		"prev_ending":   task.PrevEnding,
+		"system_prompt": computeSystemPrompt(task.Style),
+	}, nil
+}
+
+func extractNodeFunc(ctx context.Context, msg *schema.Message) (*ChapterTask, error) {
+	task, ok := ctx.Value(ctxKeyChapterTask).(*ChapterTask)
+	if !ok {
+		return nil, fmt.Errorf("task not found in context")
+	}
+	task.Script = msg.Content
+
+	parts := strings.Split(msg.Content, "===SEGMENT_BOUNDARY===")
+	for i, p := range parts {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			if i == 0 {
+				task.Script = p
+			}
+			task.ScriptSegments = append(task.ScriptSegments, p)
+		}
+	}
+	return task, nil
+}
+
+func ttsNodeFunc(ctx context.Context, task *ChapterTask, ttsClient tts.TTSProvider) (*ChapterTask, error) {
+	if task.Error != "" {
+		return task, nil // 审核未通过，跳过 TTS
+	}
+	userID, _ := ctx.Value("userID").(string)
+	eventCh, _ := ctx.Value("eventCh").(chan *adk.AgentEvent)
+
+	if len(task.ScriptSegments) <= 1 {
+		path, err := ttsClient.TextToSpeech(ctx, task.Script, task.Topic, userID)
+		if err != nil {
+			return nil, err
+		}
+		task.AudioPath = path
+		return task, nil
+	}
+
+	var paths []string
+	for i, seg := range task.ScriptSegments {
+		filename := fmt.Sprintf("%s_第%d集", task.Topic, i+1)
+		path, err := ttsClient.TextToSpeech(ctx, seg, filename, userID)
+		if err != nil {
+			return nil, err
+		}
+		paths = append(paths, path)
+		pushEvent(eventCh, "第%d章第%d集生成完成", task.ChapterInt, i+1)
+	}
+	task.AudioPaths = paths
+	task.AudioPath = paths[0]
 	return task, nil
 }
 
@@ -454,8 +481,6 @@ func onSubChatModeNodeStart(
 		}
 		pushEvent(eventCh, "开始第%d章的音频文本生成\n输入:\n%s\n风格:%s\n时长:%d\n",
 			task.ChapterIdx, trunc(strings.Join(parts, "\n"), 100), task.Style, task.DurationMin)
-		// pushEvent(eventCh, "开始第%d章的音频文本生成\n输入:\n%s\n风格:%s\n时长:%d\n",
-		// 	task.ChapterIdx, strings.Join(parts, "\n"), task.Style, task.DurationMin)
 		return ctx
 	}
 }
@@ -500,26 +525,6 @@ func onPrepareNodeEnd(
 	}
 }
 
-func estimateDuration(contentLen int, style string) int {
-	speed := 200
-	s := strings.ToLower(style)
-	switch {
-	case strings.Contains(s, "小朋友"), strings.Contains(s, "儿童"),
-		strings.Contains(s, "小孩"), strings.Contains(s, "慢"):
-		speed = 150
-	case strings.Contains(s, "说书"), strings.Contains(s, "博主"),
-		strings.Contains(s, "快"):
-		speed = 250
-	}
-	m := contentLen / speed
-	if m < 3 {
-		m = 3
-	} else if m > 15 {
-		m = 15
-	}
-	return m
-}
-
 func duration2RuneLen(duration int, style string) int {
 	speed := 200
 	s := strings.ToLower(style)
@@ -538,4 +543,46 @@ var chapterTitleRegex = regexp.MustCompile(`第[一二三四五六七八九十�
 
 func isChapterTitle(s string) bool {
 	return chapterTitleRegex.MatchString(s)
+}
+
+func computeSystemPrompt(style string) string {
+	if strings.Contains(style, "小朋友") || strings.Contains(style, "儿童") || strings.Contains(style, "小孩") {
+		return `你是专业的有声读物编剧，擅长将枯燥的历史故事改编成7岁小朋友爱听的生动故事。
+
+## 改编原则（必须遵守）
+1. **拒绝复读机**：不要简单换一种说法复述原文。请在不违背历史情节的前提下，
+   大胆补充人物的对话、心理活动、动作细节。
+2. **丰富感官描写**：加入声音（啊呀呀！叮叮当当！咚咚咚！）、表情（瞪圆了眼睛、咧开嘴笑）、
+   动作细节（握紧了拳头、擦了擦汗）。
+3. **扩展关键场景**：原文一句话带过的战斗、冲突，你要展开成3-5句。
+4. **口语化表达**：用"哇塞"、"哎呀"、"太厉害了"等口语。多用拟声词和感叹词。
+5. **用词规范**：小孩听不懂的词要解释。比如"檄文"改成"一封很厉害的信"。
+6. **大胆扩展**：你的输出长度**至少**是原文的 **1.5倍**。
+7. **上文承接**：当用户没有提供上一回结尾时，不用机械强行进行衔接
+8. 禁止任何剧本格式、列表、序号
+
+## 节奏感原则（非常重要）
+1. **拟声词只用在关键时刻**：只在战斗、冲突、情绪爆发等高潮场景使用拟声词。平淡的叙述（走路、说话、思考）不要加。
+2. **高潮场景详细写，过渡场景简单写**：
+   - 高潮场景（战斗、对决、重要对话）：进行适当的扩写。
+   - 过渡场景（行军、铺垫、日常）：简单带过即可，不要过度渲染。
+3. **避免每句都加感叹词**："啊"、"呀"、"哇塞" 这类感叹词，只在人物情绪波动时使用，不要句句都加。
+
+## 必须在每个场景中做到的三件事（逐句检查）
+1. **每 100 字至少 1 个拟声词**：战斗用“咚咚咚”“嗖嗖嗖”“轰隆隆”“噼里啪啦”等等，
+   人物动作用“啪嗒啪嗒”“咕噜咕噜”“呼哧呼哧”等等。
+2. **每个关键人物至少 1 次内心独白**：被骗时想什么？中计后想什么？
+   用引号把心里话写出来，比如“完了完了，上当了！”
+3. **每个高潮瞬间至少 1 个特写镜头**：不要只写“他冲过去”，要写
+   “他咬紧了牙关，眼睛瞪得像铜铃，汗珠从额头滚下来，大吼一声冲了过去”。
+
+## 改写示例
+原文："张飞大喝一声，冲入敌阵。"
+合格改写："张飞深吸一口气，用足全身力气大喝一声：'啊呀呀呀呀呀呀！'
+   他瞪着铜铃大的眼睛，胡子一根根竖起来，手提丈八蛇矛，像一头下山猛虎，
+   冲入敌阵！"
+`
+	}
+	// 默认 prompt
+	return "你是一位专业的有声读物编剧，擅长将各类内容转化为生动、吸引人的音频脚本。"
 }

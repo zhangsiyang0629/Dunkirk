@@ -15,6 +15,7 @@ import (
 
 	"github.com/cloudwego/eino-ext/components/model/ark"
 	"github.com/cloudwego/eino/callbacks"
+	"github.com/cloudwego/eino/compose"
 	"github.com/gin-gonic/gin"
 	"github.com/redis/go-redis/v9"
 )
@@ -66,6 +67,11 @@ func main() {
 			return ctx
 		}).
 		OnErrorFn(func(ctx context.Context, info *callbacks.RunInfo, err error) context.Context {
+			if info, ok := compose.ExtractInterruptInfo(err); ok && len(info.InterruptContexts) > 0 {
+				log.Printf("[Global Interrupt] ID=%s, Addr=%s",
+					info.InterruptContexts[0].ID, info.InterruptContexts[0].Address)
+				return ctx
+			}
 			log.Printf("[Global Error] component=%s name=%s err=%v", info.Component, info.Name, err)
 			return ctx
 		}).

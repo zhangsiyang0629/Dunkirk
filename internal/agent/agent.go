@@ -66,7 +66,7 @@ func NewWithChatMode(ctx context.Context,
 5. 如果用户明确说了时长，严格按指定时长控制
 6. 调用 generate_script 生成脚本后，必须调用 approve_script 让用户审核
 7. approve_script 返回"同意"才调用 text_to_speech
-8. approve_script 返回"拒绝"或"拒绝但保留脚本"则跳过本章
+8. approve_script 返回"拒绝"或"拒绝但保留脚本"或"审核超时"则跳过本章
 9. 如果用户没提时长，generate_script 的 duration_min 参数传 0，工具会自动估算
 10. **重要：所有数字、人名、地名、数量必须严格与原文一致，不得修改**
 11. **如果记不清原文中的某个具体数字或细节，直接从原文引用该句，不要自己猜测**`,

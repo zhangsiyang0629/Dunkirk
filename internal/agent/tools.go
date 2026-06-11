@@ -174,10 +174,10 @@ func newApproveScriptTool() tool.BaseTool {
 			wasInterrupted, _, _ := compose.GetInterruptState[json.RawMessage](ctx)
 			if !wasInterrupted {
 				return "", compose.StatefulInterrupt(ctx, map[string]any{
-					"question":       "请审核以下脚本",
-					"options":        []string{"同意", "拒绝", "拒绝但保留脚本"},
-					"type":           "script_review",
-					"script_preview": input.ScriptPreview,
+					"question": "请审核以下脚本",
+					"options":  []string{"同意", "拒绝", "拒绝但保留脚本"},
+					"type":     "script_review",
+					//"script_preview": input.ScriptPreview,
 				}, nil)
 			}
 			isTarget, hasData, data := compose.GetResumeContext[string](ctx)
@@ -185,10 +185,10 @@ func newApproveScriptTool() tool.BaseTool {
 				return data, nil
 			}
 			return "", compose.StatefulInterrupt(ctx, map[string]any{
-				"question":       "请审核以下脚本",
-				"options":        []string{"同意", "拒绝", "拒绝但保留脚本"},
-				"type":           "script_review",
-				"script_preview": input.ScriptPreview,
+				"question": "请审核以下脚本",
+				"options":  []string{"同意", "拒绝", "拒绝但保留脚本"},
+				"type":     "script_review",
+				//"script_preview": input.ScriptPreview,
 			}, nil)
 		})
 	return t
