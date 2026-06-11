@@ -4,12 +4,14 @@ import { useChat } from './composables/useChat.js'
 import FileUpload from './components/FileUpload.vue'
 import ChatInput from './components/ChatInput.vue'
 import ChatLog from './components/ChatLog.vue'
+import ScriptList from './components/ScriptList.vue'
 
 const { messages, isStreaming, pendingInterrupt, send, resume } = useChat()
 const userId = ref('zsy')
 const fileRefId = ref('')
 const inputText = ref('')
 const showFilePanel = ref(false)
+const showScripts = ref(false)
 const chatArea = ref(null)
 
 watch(messages, async () => {
@@ -53,12 +55,13 @@ const downloadFiles = computed(() => {
 <template>
   <div class="app">
     <!-- 顶部导航 -->
-    <header v-if="hasMessages">
+    <header>
       <div class="header-left">
         <span class="logo">🎧</span>
         <span class="title">有声读物</span>
       </div>
       <div class="header-right">
+        <button class="icon-btn" @click="showScripts = !showScripts" title="查看脚本">📝</button>
         <button class="icon-btn" @click="showFilePanel = !showFilePanel" title="上传文件">📁</button>
         <button class="icon-btn" @click="clearChat" title="新建对话">✏️</button>
         <span class="user-badge">{{ userId }}</span>
@@ -111,6 +114,14 @@ const downloadFiles = computed(() => {
         <div v-if="fileRefId" class="sidebar-file">📎 文件已上传</div>
       </aside>
     </div>
+
+    <!-- 脚本面板（覆盖在主内容上方） -->
+    <ScriptList
+      v-if="showScripts"
+      :userId="userId"
+      :bookRef="fileRefId"
+      @close="showScripts = false"
+    />
 
     <!-- 对话时的底部输入 -->
     <div v-if="hasMessages" class="bottom-bar">
