@@ -60,12 +60,8 @@ type KnowledgeBase struct {
 	redisClient      *redis.Client
 }
 
-func New(ctx context.Context, cfg *config.Config) (*KnowledgeBase, error) {
-	rdb := redis.NewClient(&redis.Options{
-		Addr:          cfg.RedisAddr,
-		Protocol:      2,
-		UnstableResp3: true,
-	})
+func New(ctx context.Context, cfg *config.Config, rdb *redis.Client) (*KnowledgeBase, error) {
+
 	if err := rdb.Ping(ctx).Err(); err != nil {
 		return nil, fmt.Errorf("redis ping error: %w", err)
 	}
@@ -362,7 +358,6 @@ func (kb *KnowledgeBase) UpdateBookNameRefFilePath(ctx context.Context,
 func (kb *KnowledgeBase) ResolveBookName(ctx context.Context, userID, bookName string) (string, error) {
 	key := fmt.Sprintf("%s%s:%s", bookIndexPrefix, bookName, userID)
 	exists, err := kb.redisClient.Exists(ctx, key).Result()
-	fmt.Println("exists------", exists, key, err)
 	if err != nil {
 		return "", fmt.Errorf("check exists failed: %w", err)
 	}

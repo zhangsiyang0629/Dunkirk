@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"dunkirk/internal/kb"
+	"dunkirk/internal/script"
 	"dunkirk/internal/tts"
 	"encoding/json"
 	"fmt"
@@ -12,6 +13,7 @@ import (
 	"github.com/cloudwego/eino-ext/components/model/ark"
 	"github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/components/tool/utils"
+	"github.com/cloudwego/eino/compose"
 	"github.com/cloudwego/eino/schema"
 )
 
@@ -37,7 +39,11 @@ type TTSInput struct {
 	Filename string `json:"filename" jsonschema_description:"输出文件名(不含扩展名)"`
 }
 
-func newTools(kb *kb.KnowledgeBase, cm *ark.ChatModel, tc tts.TTSProvider) []tool.BaseTool {
+type ApproveInput struct {
+	ScriptPreview string `json:"script_preview" jsonschema_description:"生成的脚本内容，供用户审核"`
+}
+
+func newTools(kb *kb.KnowledgeBase, cm *ark.ChatModel, tc tts.TTSProvider, sc *script.Store) []tool.BaseTool {
 	search, _ := utils.InferTool("search_knowledge_base", "搜索知识库中相关的章节，返回章节标题列表。",
 		func(ctx context.Context, input *SearchInput) (string, error) {
 			if input.TopK <= 0 {
@@ -120,6 +126,10 @@ func newTools(kb *kb.KnowledgeBase, cm *ark.ChatModel, tc tts.TTSProvider) []too
 			if err != nil {
 				return "", fmt.Errorf("generate script: %w", err)
 			}
+
+			bookRef, _ := ctx.Value("bookRef").(string)
+			sc.Save(ctx, userID, bookRef, input.Topic, resp.Content)
+
 			return resp.Content, nil
 		})
 
@@ -133,7 +143,8 @@ func newTools(kb *kb.KnowledgeBase, cm *ark.ChatModel, tc tts.TTSProvider) []too
 			}
 			return path, nil
 		})
-	return []tool.BaseTool{search, genScript, ttsTool}
+
+	return []tool.BaseTool{search, genScript, ttsTool, newApproveScriptTool()}
 }
 
 func estimateDuration(contentLen int, style string) int {
@@ -155,4 +166,30 @@ func estimateDuration(contentLen int, style string) int {
 		return 20
 	}
 	return m
+}
+
+func newApproveScriptTool() tool.BaseTool {
+	t, _ := utils.InferOptionableTool("approve_script", "将生成的脚本提交给用户审核，用户同意后才继续生成音频",
+		func(ctx context.Context, input *ApproveInput, opts ...tool.Option) (string, error) {
+			wasInterrupted, _, _ := compose.GetInterruptState[json.RawMessage](ctx)
+			if !wasInterrupted {
+				return "", compose.StatefulInterrupt(ctx, map[string]any{
+					"question": "请审核以下脚本",
+					"options":  []string{"同意", "拒绝", "拒绝但保留脚本"},
+					"type":     "script_review",
+					//"script_preview": input.ScriptPreview,
+				}, nil)
+			}
+			isTarget, hasData, data := compose.GetResumeContext[string](ctx)
+			if isTarget && hasData {
+				return data, nil
+			}
+			return "", compose.StatefulInterrupt(ctx, map[string]any{
+				"question": "请审核以下脚本",
+				"options":  []string{"同意", "拒绝", "拒绝但保留脚本"},
+				"type":     "script_review",
+				//"script_preview": input.ScriptPreview,
+			}, nil)
+		})
+	return t
 }

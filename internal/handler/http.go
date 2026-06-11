@@ -285,9 +285,12 @@ func (h *Handler) audioSSE(
 		}
 		t = h.tm.CreateTaskFromIntent(userInput, result, userID, ref, result.Book, false)
 	}
+	sessionID := uuid.New().String()
 	t.UseSSML = h.cfg.TTSProvider == "azure"
+	t.CheckpointID = sessionID
 	fmt.Printf("tts provider: %v\n", h.cfg.TTSProvider)
 	log.Printf("[audio task create] %#v", *t)
+
 	h.tm.StartTask(c.Request.Context(), t)
 
 	data, _ := json.Marshal(gin.H{"task_id": t.ID})
@@ -335,6 +338,16 @@ func (h *Handler) audioSSE(
 					c.Writer.Flush()
 				}
 			}
+		} else if event.Action != nil && event.Action.Interrupted != nil {
+			contexts := event.Action.Interrupted.InterruptContexts
+			data, _ := json.Marshal(gin.H{
+				"interrupt_id":  contexts[0].ID,
+				"checkpoint_id": sessionID,
+				"question":      contexts[0].Info.(map[string]any)["question"],
+				"options":       contexts[0].Info.(map[string]any)["options"],
+			})
+			fmt.Fprintf(c.Writer, "event: interrupt\ndata: %s\n\n", data)
+			c.Writer.Flush()
 		}
 	}
 	c.Writer.Flush()
@@ -355,6 +368,12 @@ func (h *Handler) Resume(c *gin.Context) {
 	ctx := compose.BatchResumeWithData(c.Request.Context(), map[string]any{
 		req.InterruptID: req.Choice,
 	})
+
+	if t, ok := h.tm.GetTaskByCheckpointID(req.CheckpointID); ok {
+		// Pipeline 审核中断
+		t.ResumeCh <- req.Choice
+		return
+	}
 
 	result, err := h.intentParser.Invoke(ctx, "", compose.WithCheckPointID(req.CheckpointID))
 	if err != nil {

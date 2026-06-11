@@ -33,14 +33,16 @@ func (m *streamingModel) Stream(
 			if err != nil {
 				break
 			}
-			eventCh <- &adk.AgentEvent{
-				AgentName: "pipeline",
-				Output: &adk.AgentOutput{
-					MessageOutput: &adk.MessageVariant{
-						IsStreaming:   true,
-						MessageStream: schema.StreamReaderFromArray([]*schema.Message{chunk}),
+			if eventCh != nil {
+				eventCh <- &adk.AgentEvent{
+					AgentName: "pipeline",
+					Output: &adk.AgentOutput{
+						MessageOutput: &adk.MessageVariant{
+							IsStreaming:   true,
+							MessageStream: schema.StreamReaderFromArray([]*schema.Message{chunk}),
+						},
 					},
-				},
+				}
 			}
 			pw.Send(chunk, nil)
 		}

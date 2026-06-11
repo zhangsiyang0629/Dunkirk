@@ -7,6 +7,7 @@ import (
 	"dunkirk/internal/handler"
 	"dunkirk/internal/kb"
 	"dunkirk/internal/pipeline"
+	"dunkirk/internal/script"
 	"dunkirk/internal/task"
 	"dunkirk/internal/tts"
 	"log"
@@ -14,7 +15,9 @@ import (
 
 	"github.com/cloudwego/eino-ext/components/model/ark"
 	"github.com/cloudwego/eino/callbacks"
+	"github.com/cloudwego/eino/compose"
 	"github.com/gin-gonic/gin"
+	"github.com/redis/go-redis/v9"
 )
 
 func main() {
@@ -24,11 +27,20 @@ func main() {
 	file, _ := os.OpenFile("app.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
 	log.SetOutput(file)
 
-	knowledgeBase, err := kb.New(ctx, cfg)
+	rdb := redis.NewClient(&redis.Options{
+		Addr:          cfg.RedisAddr,
+		Protocol:      2,
+		UnstableResp3: true,
+	})
+
+	knowledgeBase, err := kb.New(ctx, cfg, rdb)
 	if err != nil {
 		log.Fatalf("init kb: %v", err)
 	}
 	defer knowledgeBase.Close()
+
+	scriptStore := script.NewStore(rdb)
+
 	ttsProvider := tts.GetTTSProvider(cfg)
 	maxTokens := 16384
 	cm, err := ark.NewChatModel(ctx, &ark.ChatModelConfig{
@@ -40,7 +52,7 @@ func main() {
 		log.Fatalf("new chat model: %v", err)
 	}
 
-	agt, err := agent.NewWithChatMode(ctx, cfg, cm, knowledgeBase, ttsProvider)
+	agt, err := agent.NewWithChatMode(ctx, cfg, cm, knowledgeBase, ttsProvider, scriptStore)
 	if err != nil {
 		log.Fatalf("init agent: %v", err)
 	}
@@ -55,6 +67,11 @@ func main() {
 			return ctx
 		}).
 		OnErrorFn(func(ctx context.Context, info *callbacks.RunInfo, err error) context.Context {
+			if info, ok := compose.ExtractInterruptInfo(err); ok && len(info.InterruptContexts) > 0 {
+				log.Printf("[Global Interrupt] ID=%s, Addr=%s",
+					info.InterruptContexts[0].ID, info.InterruptContexts[0].Address)
+				return ctx
+			}
 			log.Printf("[Global Error] component=%s name=%s err=%v", info.Component, info.Name, err)
 			return ctx
 		}).
@@ -63,7 +80,7 @@ func main() {
 	// Register as global callbacks (applies to all subsequent runs)
 	callbacks.AppendGlobalHandlers(ghandler)
 
-	p, err := pipeline.New(ctx, knowledgeBase, cm, ttsProvider, cfg.AudioDir)
+	p, err := pipeline.New(ctx, knowledgeBase, cm, ttsProvider, cfg.AudioDir, scriptStore)
 	if err != nil {
 		log.Fatalf("init pipeline: %v", err)
 	}

@@ -1,20 +1,23 @@
 package pipeline
 
 type ChapterTask struct {
-	Topic         string
-	Style         string
-	DurationMin   int
-	ChapterIdx    int
-	ChapterInt    int
-	TotalChapters int
-	Content       string
-	Script        string
-	AudioPath     string
-	FileRefID     string
-	Error         string
-	UseSSML       bool
-	PrevEnding    string
-	IsExactSerach bool
+	Topic          string
+	Style          string
+	DurationMin    int
+	ChapterIdx     int
+	ChapterInt     int
+	TotalChapters  int
+	Content        string
+	Script         string
+	AudioPath      string
+	FileRefID      string
+	Error          string
+	UseSSML        bool
+	PrevEnding     string
+	IsExactSerach  bool
+	CheckpointID   string
+	ScriptSegments []string // 分段后的脚本，每段对应一集
+	AudioPaths     []string // 每集对应的音频文件路径
 }
 
 const (
