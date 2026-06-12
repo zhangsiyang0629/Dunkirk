@@ -311,7 +311,7 @@ func prepareNodeFunc(ctx context.Context, knowledgeBase *kb.KnowledgeBase, task 
 
 	userID, _ := ctx.Value("userID").(string)
 	if task.FileRefID != "" && task.ChapterInt > 1 {
-		ending, _ := knowledgeBase.GetChapterEnding(ctx, userID, task.FileRefID, task.ChapterInt)
+		ending, _ := knowledgeBase.GetChapterEnding(ctx, userID, task.FileRefID, task.ChapterInt-1)
 		task.PrevEnding = ending
 	}
 
@@ -530,7 +530,8 @@ func onPrepareNodeEnd(
 			return ctx
 		}
 		ct := output.(map[string]any)
-		pushEvent(eventCh, "时长预估结果为%d分钟左右, 字数%d\n", ct["duration_min"], ct["rune_len"])
+		pushEvent(eventCh, "时长预估结果为%d分钟左右, 字数%d, 前一章结尾内容：%s\n",
+			ct["duration_min"], ct["rune_len"], trunc(ct["prev_ending"].(string), 50))
 		return ctx
 	}
 }

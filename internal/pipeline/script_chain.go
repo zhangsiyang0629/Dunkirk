@@ -81,7 +81,7 @@ func loopSegmentedScriptGenerate(
 
 
 ## 输出格式：
-[脚本正文]
+[脚本正文]{结束语}
 
 ===摘要===
 用小于300字概括本段生成的内容`, theContent, thePreEnding, ending)
@@ -126,9 +126,9 @@ func loopSegmentedScriptGenerate(
 
 		var ending string
 		if i == parts-1 {
-			ending = "请在结尾加上章节结束语，例如：\"欲知后事如何，且听下回分解\""
+			ending = "请在正文结尾（===摘要===之前）加上章节结束语，例如：\"欲知后事如何，且听下回分解\""
 		} else {
-			ending = "请在结尾加上本集结束语，例如：\"后面又会发生什么呢？咱们下集接着说！\""
+			ending = "请在正文结尾（===摘要===之前）加上本集结束语，例如：\"后面又会发生什么呢？咱们下集接着说！\""
 		}
 
 		var prompt string
