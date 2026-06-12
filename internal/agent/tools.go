@@ -128,7 +128,7 @@ func newTools(kb *kb.KnowledgeBase, cm *ark.ChatModel, tc tts.TTSProvider, sc *s
 			}
 
 			bookRef, _ := ctx.Value("bookRef").(string)
-			sc.Save(ctx, userID, bookRef, input.Topic, resp.Content)
+			sc.Save(ctx, userID, bookRef, input.Topic, resp.Content, 0, []string{resp.Content})
 
 			return resp.Content, nil
 		})

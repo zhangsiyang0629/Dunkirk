@@ -8,6 +8,7 @@ import (
 	"dunkirk/internal/docproc"
 	"dunkirk/internal/kb"
 	"dunkirk/internal/pipeline"
+	"dunkirk/internal/script"
 	"dunkirk/internal/task"
 	"dunkirk/internal/tts"
 	"encoding/json"
@@ -17,6 +18,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -38,6 +40,7 @@ type Handler struct {
 	intentParser compose.Runnable[string, *pipeline.IntentResult]
 	agent        *agent.Agent
 	fileStatus   *FileStatus
+	scriptStore  *script.Store
 }
 
 func New(tm *task.Manager,
@@ -45,8 +48,9 @@ func New(tm *task.Manager,
 	ttsClient tts.TTSProvider,
 	cfg *config.Config,
 	cm model.BaseChatModel,
-	fs *FileStatus) *Handler {
-	return &Handler{tm: tm, kb: kb, tts: ttsClient, cfg: cfg, cm: cm, fileStatus: fs}
+	fs *FileStatus,
+	scriptStore *script.Store) *Handler {
+	return &Handler{tm: tm, kb: kb, tts: ttsClient, cfg: cfg, cm: cm, fileStatus: fs, scriptStore: scriptStore}
 }
 
 func LoggerMiddleware(c *gin.Context) {
@@ -72,6 +76,9 @@ func Register(r *gin.Engine, h *Handler) {
 		v1.POST("/resume", h.Resume)
 		v1.DELETE("/upload/:file_ref_id", h.DeleteFile)
 		v1.GET("/audio/download/:userID/:filename", h.DownloadUserAudio)
+		v1.GET("/scripts", h.ListScripts)
+		v1.GET("/scripts/:hash", h.GetScript)
+		v1.DELETE("/scripts/:hash", h.DeleteScript)
 	}
 }
 
@@ -560,4 +567,49 @@ func (h *Handler) DownloadUserAudio(c *gin.Context) {
 		return
 	}
 	c.File(filepath.Join(h.cfg.AudioDir, userID, filename))
+}
+
+func (h *Handler) ListScripts(c *gin.Context) {
+	userID := c.GetHeader("X-User-ID")
+	offset, _ := strconv.Atoi(c.DefaultQuery("offset", "0"))
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "20"))
+	if userID == "" {
+		c.JSON(400, gin.H{"error": "user_id required"})
+		return
+	}
+	fmt.Println("==========List", userID, offset, limit)
+	scripts, err := h.scriptStore.List(c.Request.Context(), userID, offset, limit)
+	if err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(200, gin.H{"scripts": scripts})
+}
+
+func (h *Handler) GetScript(c *gin.Context) {
+	hash := c.Param("hash")
+	userID := c.GetHeader("X-User-ID")
+	bookRef := c.Query("book_ref")
+	if userID == "" || bookRef == "" {
+		c.JSON(400, gin.H{"error": "user_id and book_ref required"})
+		return
+	}
+	info, err := h.scriptStore.Get(c.Request.Context(), userID, bookRef, hash)
+	if err != nil {
+		c.JSON(404, gin.H{"error": "script not found"})
+		return
+	}
+	c.JSON(200, info)
+}
+
+func (h *Handler) DeleteScript(c *gin.Context) {
+	hash := c.Param("hash")
+	userID := c.GetHeader("X-User-ID")
+	bookRef := c.Query("book_ref")
+	if userID == "" || bookRef == "" {
+		c.JSON(400, gin.H{"error": "user_id and book_ref required"})
+		return
+	}
+	h.scriptStore.DeleteByHash(c.Request.Context(), userID, bookRef, hash)
+	c.JSON(200, gin.H{"status": "deleted"})
 }

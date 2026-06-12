@@ -87,7 +87,7 @@ func main() {
 
 	taskMgr := task.NewManager(agt, p)
 	fileStatus := handler.NewFileStatus()
-	h := handler.New(taskMgr, knowledgeBase, ttsProvider, cfg, cm, fileStatus)
+	h := handler.New(taskMgr, knowledgeBase, ttsProvider, cfg, cm, fileStatus, scriptStore)
 	initParser, err := pipeline.NewIntentParser(ctx, cm, knowledgeBase)
 	if err != nil {
 		log.Fatalf("init intent parser: %v", err)

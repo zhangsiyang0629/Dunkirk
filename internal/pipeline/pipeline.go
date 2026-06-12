@@ -114,17 +114,20 @@ func New(ctx context.Context,
 		if isTarget && hasData {
 			switch data {
 			case "同意":
-				scriptStore.Save(ctx, userID, task.FileRefID, task.Topic, task.Script)
+				scriptStore.Save(ctx, userID, task.FileRefID, task.Topic, task.Script,
+					task.ChapterInt, task.ScriptSegments)
 				return task, nil
 			case "拒绝":
 				task.Error = "脚本审核未通过"
 				return task, nil
 			case "拒绝但保留脚本":
-				scriptStore.Save(ctx, userID, task.FileRefID, task.Topic, task.Script)
+				scriptStore.Save(ctx, userID, task.FileRefID, task.Topic, task.Script,
+					task.ChapterInt, task.ScriptSegments)
 				task.Error = "脚本审核未通过（脚本文案已保留）"
 				return task, nil
 			case "审核超时":
-				scriptStore.Save(ctx, userID, task.FileRefID, task.Topic, task.Script)
+				scriptStore.Save(ctx, userID, task.FileRefID, task.Topic, task.Script,
+					task.ChapterInt, task.ScriptSegments)
 				task.Error = "审核超时，拒绝生成（脚本文案已保留）"
 				return task, nil
 			}
