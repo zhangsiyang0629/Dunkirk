@@ -77,67 +77,11 @@ func New(ctx context.Context,
 	}, map[string]bool{"plain_script": true, "ssml_script": true, "seg_plain_script": true})
 
 	saveEndingNode := compose.InvokableLambda(func(ctx context.Context, msg *schema.Message) (*schema.Message, error) {
-		task, _ := ctx.Value(ctxKeyChapterTask).(*ChapterTask)
-		if task == nil || task.FileRefID == "" {
-			return msg, nil
-		}
-
-		paragraphs := strings.Split(msg.Content, "\n\n")
-		var lastTwo []string
-		for i := len(paragraphs) - 1; i >= 0 && len(lastTwo) < 2; i-- {
-			p := strings.TrimSpace(paragraphs[i])
-			if p != "" {
-				lastTwo = append([]string{p}, lastTwo...)
-			}
-		}
-		if len(lastTwo) > 0 {
-			userID, _ := ctx.Value("userID").(string)
-			ending := strings.Join(lastTwo, "\n\n")
-			knowledgeBase.SaveChapterEnding(ctx, task.FileRefID, userID, task.ChapterInt, ending)
-		}
-		return msg, nil
+		return saveEndingNodeFunc(ctx, msg, knowledgeBase)
 	})
 
 	approvalNode := compose.InvokableLambda(func(ctx context.Context, task *ChapterTask) (*ChapterTask, error) {
-		wasInterrupted, _, interruptedState := compose.GetInterruptState[*ChapterTask](ctx)
-		if !wasInterrupted {
-			return nil, compose.StatefulInterrupt(ctx, map[string]any{
-				"question": "请审核以下脚本",
-				"options":  []string{"同意", "拒绝", "拒绝但保留脚本"},
-				"type":     "script_review",
-				//"script_preview": task.Script,
-			}, task)
-		}
-		userID, _ := ctx.Value("userID").(string)
-		isTarget, hasData, data := compose.GetResumeContext[string](ctx)
-		task = interruptedState
-		if isTarget && hasData {
-			switch data {
-			case "同意":
-				scriptStore.Save(ctx, userID, task.FileRefID, task.Topic, task.Script,
-					task.ChapterInt, task.ScriptSegments)
-				return task, nil
-			case "拒绝":
-				task.Error = "脚本审核未通过"
-				return task, nil
-			case "拒绝但保留脚本":
-				scriptStore.Save(ctx, userID, task.FileRefID, task.Topic, task.Script,
-					task.ChapterInt, task.ScriptSegments)
-				task.Error = "脚本审核未通过（脚本文案已保留）"
-				return task, nil
-			case "审核超时":
-				scriptStore.Save(ctx, userID, task.FileRefID, task.Topic, task.Script,
-					task.ChapterInt, task.ScriptSegments)
-				task.Error = "审核超时，拒绝生成（脚本文案已保留）"
-				return task, nil
-			}
-		}
-		return nil, compose.StatefulInterrupt(ctx, map[string]any{
-			"question": "请审核以下脚本",
-			"options":  []string{"同意", "拒绝", "拒绝但保留脚本"},
-			"type":     "script_review",
-			//"script_preview": task.Script,
-		}, *task)
+		return approvalNodeFunc(ctx, task, scriptStore)
 	})
 
 	g := compose.NewGraph[*ChapterTask, *ChapterTask]()
@@ -367,7 +311,7 @@ func prepareNodeFunc(ctx context.Context, knowledgeBase *kb.KnowledgeBase, task 
 
 	userID, _ := ctx.Value("userID").(string)
 	if task.FileRefID != "" && task.ChapterInt > 1 {
-		ending, _ := knowledgeBase.GetChapterEnding(ctx, userID, task.FileRefID, task.ChapterInt-1)
+		ending, _ := knowledgeBase.GetChapterEnding(ctx, userID, task.FileRefID, task.ChapterInt)
 		task.PrevEnding = ending
 	}
 
@@ -432,6 +376,69 @@ func ttsNodeFunc(ctx context.Context, task *ChapterTask, ttsClient tts.TTSProvid
 	task.AudioPaths = paths
 	task.AudioPath = paths[0]
 	return task, nil
+}
+
+func saveEndingNodeFunc(ctx context.Context, msg *schema.Message, knowledgeBase *kb.KnowledgeBase) (*schema.Message, error) {
+	task, _ := ctx.Value(ctxKeyChapterTask).(*ChapterTask)
+	if task == nil || task.FileRefID == "" {
+		return msg, nil
+	}
+
+	paragraphs := strings.Split(msg.Content, "\n\n")
+	var lastTwo []string
+	for i := len(paragraphs) - 1; i >= 0 && len(lastTwo) < 2; i-- {
+		p := strings.TrimSpace(paragraphs[i])
+		if p != "" {
+			lastTwo = append([]string{p}, lastTwo...)
+		}
+	}
+	if len(lastTwo) > 0 {
+		userID, _ := ctx.Value("userID").(string)
+		ending := strings.Join(lastTwo, "\n\n")
+		knowledgeBase.SaveChapterEnding(ctx, userID, task.FileRefID, task.ChapterInt, ending)
+	}
+	return msg, nil
+}
+
+func approvalNodeFunc(ctx context.Context, task *ChapterTask, scriptStore *script.Store) (*ChapterTask, error) {
+	wasInterrupted, _, interruptedState := compose.GetInterruptState[*ChapterTask](ctx)
+	if !wasInterrupted {
+		return nil, compose.StatefulInterrupt(ctx, map[string]any{
+			"question": "请审核以下脚本",
+			"options":  []string{"同意", "拒绝", "拒绝但保留脚本"},
+			"type":     "script_review",
+		}, task)
+	}
+	userID, _ := ctx.Value("userID").(string)
+	isTarget, hasData, data := compose.GetResumeContext[string](ctx)
+	task = interruptedState
+	if isTarget && hasData {
+		switch data {
+		case "同意":
+			scriptStore.Save(ctx, userID, task.FileRefID, task.Topic, task.Script,
+				task.ChapterInt, task.ScriptSegments)
+			return task, nil
+		case "拒绝":
+			task.Error = "脚本审核未通过"
+			return task, nil
+		case "拒绝但保留脚本":
+			scriptStore.Save(ctx, userID, task.FileRefID, task.Topic, task.Script,
+				task.ChapterInt, task.ScriptSegments)
+			task.Error = "脚本审核未通过（脚本文案已保留）"
+			return task, nil
+		case "审核超时":
+			scriptStore.Save(ctx, userID, task.FileRefID, task.Topic, task.Script,
+				task.ChapterInt, task.ScriptSegments)
+			task.Error = "审核超时，拒绝生成（脚本文案已保留）"
+			return task, nil
+		}
+	}
+	return nil, compose.StatefulInterrupt(ctx, map[string]any{
+		"question": "请审核以下脚本",
+		"options":  []string{"同意", "拒绝", "拒绝但保留脚本"},
+		"type":     "script_review",
+		//"script_preview": task.Script,
+	}, *task)
 }
 
 func onSearchNodeStart(

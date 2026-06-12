@@ -577,7 +577,6 @@ func (h *Handler) ListScripts(c *gin.Context) {
 		c.JSON(400, gin.H{"error": "user_id required"})
 		return
 	}
-	fmt.Println("==========List", userID, offset, limit)
 	scripts, err := h.scriptStore.List(c.Request.Context(), userID, offset, limit)
 	if err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
