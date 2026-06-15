@@ -6,7 +6,9 @@ import (
 	"dunkirk/internal/agent"
 	"dunkirk/internal/config"
 	"dunkirk/internal/docproc"
+	"dunkirk/internal/global"
 	"dunkirk/internal/kb"
+	"dunkirk/internal/memory"
 	"dunkirk/internal/pipeline"
 	"dunkirk/internal/script"
 	"dunkirk/internal/task"
@@ -37,10 +39,19 @@ type Handler struct {
 	tts          tts.TTSProvider
 	cfg          *config.Config
 	cm           model.BaseChatModel
-	intentParser compose.Runnable[string, *pipeline.IntentResult]
+	intentParser compose.Runnable[map[string]any, *pipeline.IntentResult]
 	agent        *agent.Agent
 	fileStatus   *FileStatus
 	scriptStore  *script.Store
+	convStore    *memory.ConversationStore
+}
+
+func (h *Handler) SetConvStore(cs *memory.ConversationStore) {
+	h.convStore = cs
+}
+
+func (h *Handler) SetIntentParser(p compose.Runnable[map[string]any, *pipeline.IntentResult]) {
+	h.intentParser = p
 }
 
 func New(tm *task.Manager,
@@ -79,6 +90,8 @@ func Register(r *gin.Engine, h *Handler) {
 		v1.GET("/scripts", h.ListScripts)
 		v1.GET("/scripts/:hash", h.GetScript)
 		v1.DELETE("/scripts/:hash", h.DeleteScript)
+		v1.GET("/conversations", h.ListConversations)
+		v1.GET("/conversations/:id/messages", h.GetConversationMessages)
 	}
 }
 
@@ -115,37 +128,58 @@ func (h *Handler) Chat(c *gin.Context) {
 	}
 
 	message := c.PostForm("message")
-	historyRaw := c.PostForm("history")
-	fileRefID := c.PostForm("file_ref_id")
-	var history []*schema.Message
-	if historyRaw != "" {
-		json.Unmarshal([]byte(historyRaw), &history)
-	}
-
-	input := message
-	if fileRefID != "" {
-		info, ok := h.fileStatus.Get(fileRefID)
-		if !ok {
-			c.JSON(400, gin.H{"error": "file not found"})
-			return
-		}
-		input = fmt.Sprintf("用户上传了文件：%s\n%s", info.FilePath, message)
-	}
-	if message == "" {
-		if fileRefID != "" {
-			input = "请处理这个文件"
-		} else {
-			c.JSON(400, gin.H{"error": "message required"})
-			return
-		}
-	}
-
+	convID := c.PostForm("conversation_id")
 	ctx := context.WithValue(c.Request.Context(), "userID", userID)
-	ctx = context.WithValue(ctx, "file_ref_id", fileRefID)
-	ctx = context.WithValue(ctx, "file_status", h.fileStatus)
-	if fileRefID != "" {
-		ctx = context.WithValue(ctx, "book_ref", fileRefID)
+
+	if convID == "" {
+		conv, err := h.convStore.CreateConversation(c.Request.Context(), userID)
+		if err != nil {
+			c.JSON(500, gin.H{"error": "create conversation failed"})
+			return
+		}
+		convID = conv.ID
+	} else {
+		_, err := h.convStore.GetOrCreateConversation(c.Request.Context(), userID, convID)
+		if err != nil {
+			c.JSON(500, gin.H{"error": "get or create conversation failed"})
+			return
+		}
 	}
+
+	h.convStore.AppendMessage(ctx, userID, convID, &memory.Message{
+		Role:      memory.RoleUser,
+		Content:   message,
+		CreatedAt: time.Now(),
+	})
+
+	// 加载记忆上下文并注入到用户输入前
+	summary, _ := h.convStore.GetSummary(c.Request.Context(), userID, convID)
+	recentGens, _ := h.convStore.GetRecentGenerations(c.Request.Context(), userID, convID, 5)
+	memCtx := &memory.MemoryContext{
+		Summary:           summary,
+		RecentGenerations: recentGens,
+	}
+	contextStr := memory.BuildContextPrompt(memCtx)
+
+	const historyTokenBudget = 60000
+	recentMsgs, _ := h.convStore.GetRecentMessagesWithBudget(ctx, userID, convID, historyTokenBudget)
+	var history []*schema.Message
+	for _, m := range recentMsgs {
+		role := schema.User
+		if m.Role == memory.RoleAgent {
+			role = schema.Assistant
+		}
+		history = append(history, &schema.Message{Role: role, Content: m.Content})
+	}
+
+	input := map[string]any{
+		"context":    contextStr,
+		"history":    history,
+		"user_input": message,
+		"conv_id":    convID,
+	}
+
+	ctx = context.WithValue(ctx, "file_status", h.fileStatus)
 	nr := c.Request.WithContext(ctx)
 	c.Request = nr
 
@@ -178,40 +212,41 @@ func (h *Handler) Chat(c *gin.Context) {
 	c.Header("Cache-Control", "no-cache")
 	c.Header("Connection", "keep-alive")
 
+	convReadyData, _ := json.Marshal(convID)
+	fmt.Fprintf(c.Writer, "event: conv_ready\ndata: %s\n\n", convReadyData)
+	c.Writer.Flush()
+
 	intentDat, _ := json.Marshal(gin.H{"type": "intent_result", "data": result})
 	fmt.Fprintf(c.Writer, "data: %s\n\n", intentDat)
 	c.Writer.Flush()
 
 	if !result.IsAudioRequest {
-		h.chatSSE(c, message, history, userID, result)
+		h.chatSSE(c, input, userID, result)
 		return
 	}
-	if fileRefID == "" && result.Book == "" {
-		h.chatSSE(c, message, history, userID, result)
+	if result.Book == "" {
+		h.chatSSE(c, input, userID, result)
 		return
 	}
-	h.audioSSE(c, result, fileRefID, userID)
-}
-
-func (h *Handler) SetIntentParser(p compose.Runnable[string, *pipeline.IntentResult]) {
-	h.intentParser = p
+	h.audioSSE(c, result, userID)
 }
 
 func (h *Handler) chatSSE(c *gin.Context,
-	message string,
-	history []*schema.Message,
+	input map[string]any,
 	userID string,
 	result *pipeline.IntentResult) {
 	intentJSON, _ := json.Marshal(result)
 	fmt.Fprintf(c.Writer, "event: intent\ndata: %s\n\n", intentJSON)
 	c.Writer.Flush()
 
-	// 流式输出
 	msgs := []*schema.Message{
 		schema.SystemMessage("你是一个友好的有声读物制作助手，帮助用户生成音频作品。当用户闲聊时友好回应，并引导到音频制作话题。"),
+		schema.SystemMessage(input["context"].(string)),
 	}
-	msgs = append(msgs, history...)
-	msgs = append(msgs, schema.UserMessage(message))
+	if history, ok := input["history"].([]*schema.Message); ok {
+		msgs = append(msgs, history...)
+	}
+	msgs = append(msgs, schema.UserMessage(input["user_input"].(string)))
 	ctx := context.WithValue(c.Request.Context(), "userID", userID)
 	stream, err := h.cm.Stream(ctx, msgs)
 	if err != nil {
@@ -221,6 +256,7 @@ func (h *Handler) chatSSE(c *gin.Context,
 	}
 	defer stream.Close()
 
+	var fullReply string
 	for {
 		chunk, err := stream.Recv()
 		if err == io.EOF {
@@ -229,50 +265,43 @@ func (h *Handler) chatSSE(c *gin.Context,
 		if err != nil {
 			break
 		}
+		fullReply += chunk.Content
 		data, _ := json.Marshal(gin.H{"content": chunk.Content})
 		fmt.Fprintf(c.Writer, "event: token\ndata: %s\n\n", data)
 		c.Writer.Flush()
 	}
 	fmt.Fprintf(c.Writer, "event: done\ndata: {}\n\n")
 	c.Writer.Flush()
+
+	if convID, ok := input["conv_id"].(string); ok && convID != "" && fullReply != "" {
+		h.convStore.AppendMessage(ctx, userID, convID, &memory.Message{
+			Role:      memory.RoleAgent,
+			Content:   fullReply,
+			CreatedAt: time.Now(),
+		})
+	}
 }
 
 func (h *Handler) audioSSE(
 	c *gin.Context,
-	result *pipeline.IntentResult,
-	fileRefID, userID string) {
+	result *pipeline.IntentResult, userID string) {
 
 	var filePath string
 	var bookRef string
 
-	if fileRefID != "" {
-		if info, ok := h.fileStatus.Get(fileRefID); ok {
-			filePath = info.FilePath
-		}
-	}
+	convID := c.PostForm("conversation_id")
 
-	/*
-		result.Book理论上一定是存在的书籍名称，因为在意图解析阶段，解析得到的书名会在数据库中进行模糊查询，
-		如果找到多条会进行中断让用户选择，最终得到的结果一定是数据库中存在的书籍名称。
-		如果没有查到，就应该让用户选择是放弃生成还是让大模型自己推理，不管是放弃生成还是大模型自己推理，都
-		不会再走到代码这里了。
-		所以result.Book理论上一定是存在的书籍名称
-	*/
-	if filePath == "" && result.Book != "" {
+	if result.Book != "" {
 		uuid, err := h.kb.ResolveBookName(c.Request.Context(), userID, result.Book)
 		if err == nil && uuid != "" {
 			bookRef = uuid
 		}
 	}
 
-	ref := fileRefID
 	var input string
-	if fileRefID != "" || bookRef != "" {
-		if ref == "" {
-			ref = bookRef
-		}
+	if bookRef != "" {
 		input = fmt.Sprintf("用户上传了文件(uuid=%s)：请处理%s\n风格要求：%s",
-			ref, result.Topic, result.Style)
+			bookRef, result.Topic, result.Style)
 		if len(result.Chapters) > 0 {
 			input += fmt.Sprintf("\n指定章节：%v", result.Chapters)
 		}
@@ -282,15 +311,15 @@ func (h *Handler) audioSSE(
 
 	var t *task.Task
 	if result.Mode == "book" && !result.SkipFile {
-		t = h.tm.CreateTaskFromIntent("全本生成", result, userID, ref, result.Book, true)
+		t = h.tm.CreateTaskFromIntent("全本生成", result, userID, bookRef, result.Book, true)
 	} else if result.Mode == "chapter" && len(result.Chapters) > 0 && !result.SkipFile {
-		t = h.tm.CreateTaskFromIntent("部分章节生成", result, userID, ref, result.Book, true)
+		t = h.tm.CreateTaskFromIntent("部分章节生成", result, userID, bookRef, result.Book, true)
 	} else {
 		userInput := fmt.Sprintf("用户话题：%s\n风格要求：%s", result.Topic, result.Style)
 		if filePath != "" {
 			userInput = fmt.Sprintf("用户上传文件：%s\n%s", filePath, userInput)
 		}
-		t = h.tm.CreateTaskFromIntent(userInput, result, userID, ref, result.Book, false)
+		t = h.tm.CreateTaskFromIntent(userInput, result, userID, bookRef, result.Book, false)
 	}
 	sessionID := uuid.New().String()
 	t.UseSSML = h.cfg.TTSProvider == "azure"
@@ -304,6 +333,21 @@ func (h *Handler) audioSSE(
 	fmt.Fprintf(c.Writer, "event: task_created\ndata: %s\n\n", data)
 	c.Writer.Flush()
 
+	appendMessageFunc := func(content string, action global.EventAction) {
+		if action == global.ACTION_PIPELINE_SCRIPT_GEN {
+			return
+		}
+		if convID == "" {
+			return
+		}
+		h.convStore.AppendMessage(c.Request.Context(), userID, convID, &memory.Message{
+			Role:      memory.RoleAgent,
+			Content:   content,
+			CreatedAt: time.Now(),
+		})
+	}
+
+	scriptAcc := ""
 	for {
 		event, ok := t.NextEvent()
 		if !ok {
@@ -316,9 +360,11 @@ func (h *Handler) audioSSE(
 			c.Writer.Flush()
 			break
 		}
+
 		if event.Output != nil && event.Output.MessageOutput != nil {
 			mv := event.Output.MessageOutput
 			if mv.IsStreaming {
+				var chunkContent string
 				for {
 					chunk, err := mv.MessageStream.Recv()
 					if err == io.EOF {
@@ -327,12 +373,19 @@ func (h *Handler) audioSSE(
 					if err != nil {
 						log.Fatalf("stream error: %v", err)
 					}
+					chunkContent += chunk.Content
+				}
+				if chunkContent != "" {
 					eventData, _ := json.Marshal(gin.H{
 						"agent":   event.AgentName,
-						"content": chunk.Content,
+						"content": chunkContent,
 					})
 					fmt.Fprintf(c.Writer, "event: progress\ndata: %s\n\n", eventData)
 					c.Writer.Flush()
+					if event.Action.CustomizedAction == global.ACTION_PIPELINE_SCRIPT_GEN &&
+						len(scriptAcc) < 250 {
+						scriptAcc += chunkContent
+					}
 				}
 			} else {
 				msg, _ := event.Output.MessageOutput.GetMessage()
@@ -343,6 +396,7 @@ func (h *Handler) audioSSE(
 					})
 					fmt.Fprintf(c.Writer, "event: progress\ndata: %s\n\n", eventData)
 					c.Writer.Flush()
+					appendMessageFunc(msg.Content, event.Action.CustomizedAction.(global.EventAction))
 				}
 			}
 		} else if event.Action != nil && event.Action.Interrupted != nil {
@@ -357,6 +411,14 @@ func (h *Handler) audioSSE(
 			c.Writer.Flush()
 		}
 	}
+
+	if scriptAcc != "" && len(scriptAcc) > 200 {
+		scriptAcc += "..."
+	}
+	if scriptAcc != "" {
+		appendMessageFunc(scriptAcc, global.ACTION_DEF)
+	}
+
 	c.Writer.Flush()
 }
 
@@ -382,7 +444,7 @@ func (h *Handler) Resume(c *gin.Context) {
 		return
 	}
 
-	result, err := h.intentParser.Invoke(ctx, "", compose.WithCheckPointID(req.CheckpointID))
+	result, err := h.intentParser.Invoke(ctx, map[string]any{}, compose.WithCheckPointID(req.CheckpointID))
 	if err != nil {
 		// 检查是否又中断（理论上不会，但做防御）
 		if info, ok := compose.ExtractInterruptInfo(err); ok {
@@ -414,15 +476,7 @@ func (h *Handler) Resume(c *gin.Context) {
 	c.Header("Content-Type", "text/event-stream")
 	c.Header("Cache-Control", "no-cache")
 	c.Header("Connection", "keep-alive")
-	var fileRefID string
-	// 如果只有书名没有 fileRefID，反查
-	if result.Book != "" {
-		uuid, err := h.kb.ResolveBookName(c.Request.Context(), userID, result.Book)
-		if err == nil && uuid != "" {
-			fileRefID = uuid
-		}
-	}
-	h.audioSSE(c, result, fileRefID, userID)
+	h.audioSSE(c, result, userID)
 }
 
 func (h *Handler) UploadFile(c *gin.Context) {
@@ -611,4 +665,33 @@ func (h *Handler) DeleteScript(c *gin.Context) {
 	}
 	h.scriptStore.DeleteByHash(c.Request.Context(), userID, bookRef, hash)
 	c.JSON(200, gin.H{"status": "deleted"})
+}
+
+func (h *Handler) ListConversations(c *gin.Context) {
+	userID := c.GetHeader("X-User-ID")
+	if userID == "" {
+		c.JSON(400, gin.H{"error": "user_id required"})
+		return
+	}
+	convs, err := h.convStore.ListConversations(c.Request.Context(), userID)
+	if err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(200, gin.H{"conversations": convs})
+}
+
+func (h *Handler) GetConversationMessages(c *gin.Context) {
+	userID := c.GetHeader("X-User-ID")
+	if userID == "" {
+		c.JSON(400, gin.H{"error": "user_id required"})
+		return
+	}
+	convID := c.Param("id")
+	msgs, err := h.convStore.GetMessages(c.Request.Context(), userID, convID)
+	if err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(200, gin.H{"messages": msgs})
 }

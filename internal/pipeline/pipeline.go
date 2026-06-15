@@ -3,6 +3,7 @@ package pipeline
 import (
 	"context"
 	"dunkirk/internal/docproc"
+	"dunkirk/internal/global"
 	"dunkirk/internal/kb"
 	"dunkirk/internal/script"
 	"dunkirk/internal/tts"
@@ -205,24 +206,24 @@ func ProcessBook(ctx context.Context,
 		log.Printf("[ProcessBook] processing chapter %d/%d", i+1, len(targets))
 		result, err := readChapter(ctx, p, task, bookName, eventCh, resumeCh)
 		if err != nil {
-			pushEvent(eventCh, "第%d章失败: %v", ch.ChapterInt, err)
+			pushEvent(eventCh, global.ACTION_TTS_OVER, "第%d章失败: %v", ch.ChapterInt, err)
 			log.Printf("[ERROR]chapter %d/%d failed: %s", task.ChapterIdx, len(chapters), err)
 			continue
 		}
 
 		if result.Error != "" {
-			pushEvent(eventCh, "第%d章已跳过: %s", ch.ChapterInt, result.Error)
+			pushEvent(eventCh, global.ACTION_TTS_OVER, "第%d章已跳过: %s", ch.ChapterInt, result.Error)
 			log.Printf("[ERROR]chapter %d/%d failed: %s", result.ChapterIdx, len(chapters), result.Error)
 			continue
 		}
 
 		if len(result.AudioPaths) > 1 {
-			pushEvent(eventCh, "第%d章完成，共%d集", ch.ChapterInt, len(result.AudioPaths))
+			pushEvent(eventCh, global.ACTION_TTS_OVER, "第%d章完成，共%d集", ch.ChapterInt, len(result.AudioPaths))
 			for i, path := range result.AudioPaths {
-				pushEvent(eventCh, "  第%d集: %s", i+1, path)
+				pushEvent(eventCh, global.ACTION_TTS_OVER, "第%d集: %s", i+1, path)
 			}
 		} else {
-			pushEvent(eventCh, "\n第%d章完成: %s\n", ch.ChapterInt, result.AudioPath)
+			pushEvent(eventCh, global.ACTION_TTS_OVER, "\n第%d章完成: %s\n", ch.ChapterInt, result.AudioPath)
 		}
 		log.Printf("chapter %d/%d done: %s", ch.ChapterInt, len(chapters), result.AudioPath)
 		results = append(results, result)
@@ -371,7 +372,7 @@ func ttsNodeFunc(ctx context.Context, task *ChapterTask, ttsClient tts.TTSProvid
 			return nil, err
 		}
 		paths = append(paths, path)
-		pushEvent(eventCh, "第%d章第%d集生成完成", task.ChapterInt, i+1)
+		pushEvent(eventCh, global.ACTION_TTS_OVER, "第%d章第%d集生成完成", task.ChapterInt, i+1)
 	}
 	task.AudioPaths = paths
 	task.AudioPath = paths[0]
@@ -450,7 +451,7 @@ func onSearchNodeStart(
 		}
 		ct := input.(*ChapterTask)
 		task, _ := ctx.Value(ctxKeyChapterTask).(*ChapterTask)
-		pushEvent(eventCh, "开始第%d章的知识库搜索, 搜索关键:%s\nfileRefID:%s\n书名:%s\n",
+		pushEvent(eventCh, global.ACTION_SEARCH, "开始第%d章的知识库搜索, 搜索关键:%s\nfileRefID:%s\n书名:%s\n",
 			task.ChapterIdx, ct.Topic, ct.FileRefID, bookName)
 		return ctx
 	}
@@ -469,7 +470,7 @@ func onSearchNodeEnd(
 		if ct.IsExactSerach {
 			searchType = "精确查询"
 		}
-		pushEvent(eventCh, "完成第%d章的知识库搜索\n搜索关键:%s\nfileRefID:%s\n书名:%s\n搜索类型:%s\n搜索结果:%s\n",
+		pushEvent(eventCh, global.ACTION_SEARCH, "完成第%d章的知识库搜索\n搜索关键:%s\nfileRefID:%s\n书名:%s\n搜索类型:%s\n搜索结果:%s\n",
 			task.ChapterIdx, ct.Topic, ct.FileRefID, bookName, searchType, trunc(ct.Content, 100))
 		return ctx
 	}
@@ -489,7 +490,7 @@ func onSubChatModeNodeStart(
 				parts = append(parts, fmt.Sprintf("[%s] %s", m.Role, m.Content))
 			}
 		}
-		pushEvent(eventCh, "开始第%d章的音频文本生成\n输入:\n%s\n风格:%s\n时长:%d\n",
+		pushEvent(eventCh, global.ACTION_PIPELINE_SCRIPT, "开始第%d章的音频文本生成\n输入:\n%s\n风格:%s\n时长:%d\n",
 			task.ChapterIdx, trunc(strings.Join(parts, "\n"), 100), task.Style, task.DurationMin)
 		return ctx
 	}
@@ -503,7 +504,7 @@ func onSubChatModeNodeEnd(
 		}
 		cbOuput := output.(*schema.Message)
 		task, _ := ctx.Value(ctxKeyChapterTask).(*ChapterTask)
-		pushEvent(eventCh, "完成第%d章的音频文本生成:%s\n", task.ChapterIdx, trunc(cbOuput.Content, 100))
+		pushEvent(eventCh, global.ACTION_PIPELINE_SCRIPT, "完成第%d章的音频文本生成:%s\n", task.ChapterIdx, trunc(cbOuput.Content, 100))
 		return ctx
 	}
 }
@@ -518,7 +519,9 @@ func onPrepareNodeStart(
 		if ct.DurationMin != 0 {
 			return ctx
 		}
-		pushEvent(eventCh, "由于用户没有指定音频时长，需要根据原文长度%d, 和讲述风格%s, 进行时长预估\n", len(ct.Content), ct.Style)
+		pushEvent(eventCh, global.ACTION_PIPELINE_PREPARE,
+			"由于用户没有指定音频时长，需要根据原文长度%d, 和讲述风格%s, 进行时长预估\n",
+			len(ct.Content), ct.Style)
 		return ctx
 	}
 }
@@ -530,7 +533,7 @@ func onPrepareNodeEnd(
 			return ctx
 		}
 		ct := output.(map[string]any)
-		pushEvent(eventCh, "时长预估结果为%d分钟左右, 字数%d, 前一章结尾内容：%s\n",
+		pushEvent(eventCh, global.ACTION_PIPELINE_PREPARE, "时长预估结果为%d分钟左右, 字数%d, 前一章结尾内容：%s\n",
 			ct["duration_min"], ct["rune_len"], trunc(ct["prev_ending"].(string), 50))
 		return ctx
 	}

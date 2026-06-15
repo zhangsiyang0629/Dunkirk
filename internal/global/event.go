@@ -1,0 +1,12 @@
+package global
+
+type EventAction int
+
+const (
+	ACTION_DEF EventAction = iota
+	ACTION_TTS_OVER
+	ACTION_SEARCH
+	ACTION_PIPELINE_PREPARE
+	ACTION_PIPELINE_SCRIPT
+	ACTION_PIPELINE_SCRIPT_GEN
+)

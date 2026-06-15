@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"context"
+	"dunkirk/internal/global"
 	"errors"
 	"fmt"
 	"io"
@@ -47,7 +48,7 @@ func newSegmentedScriptChain(_ context.Context, cm model.BaseChatModel) *compose
 	chain.AppendLambda(compose.InvokableLambda(
 		func(ctx context.Context, input map[string]any) (*schema.Message, error) {
 			eventCh, _ := ctx.Value("eventCh").(chan *adk.AgentEvent)
-			pushEvent(eventCh, "由于用户没有指定时长，可能需要分段输出\n")
+			pushEvent(eventCh, global.ACTION_PIPELINE_SCRIPT, "由于用户没有指定时长，可能需要分段输出\n")
 			return loopSegmentedScriptGenerate(ctx, input, cm)
 		}),
 		compose.WithNodeKey("sub_pipeline_seg_chatMode"),
@@ -68,7 +69,7 @@ func loopSegmentedScriptGenerate(
 	runeCount := len([]rune(content))
 	parts := getPartNum(runeCount)
 	eventCh, _ := ctx.Value("eventCh").(chan *adk.AgentEvent)
-	pushEvent(eventCh, "原文长度：%d，分为%d段\n", runeCount, parts)
+	pushEvent(eventCh, global.ACTION_PIPELINE_SCRIPT, "原文长度：%d，分为%d段\n", runeCount, parts)
 
 	firstUserMsgPromptFun := func(theContent, thePreEnding, ending string) string {
 		return fmt.Sprintf(`
@@ -90,7 +91,7 @@ func loopSegmentedScriptGenerate(
 	sentences := splitBySentence(content)
 	if parts <= 1 {
 		log.Printf("[SEG PLAIN SCRIPT]no segment, generate whole chapter, runeCount:%d", runeCount)
-		pushEvent(eventCh, "原文长度%d子，长度较小，无需分段，直接生成\n\n", runeCount)
+		pushEvent(eventCh, global.ACTION_PIPELINE_SCRIPT, "原文长度%d子，长度较小，无需分段，直接生成\n\n", runeCount)
 		stream, err := cm.Stream(ctx, []*schema.Message{
 			schema.SystemMessage(systemPrompt),
 			schema.UserMessage(firstUserMsgPromptFun(content, prevEnding,
@@ -114,7 +115,7 @@ func loopSegmentedScriptGenerate(
 		segText := strings.Join(seg, "")
 		log.Printf("[SEG PLAIN SCRIPT START]should segment, generate segement %d/%d chapter, runeCount:%d/%d\n",
 			i+1, parts, len([]rune(segText)), runeCount)
-		pushEvent(eventCh, "开始生成第%d/%d段音频文案，原文长度：%d/%d\n\n",
+		pushEvent(eventCh, global.ACTION_PIPELINE_SCRIPT, "开始生成第%d/%d段音频文案，原文长度：%d/%d\n\n",
 			i+1, parts, len([]rune(segText)), runeCount)
 		var opening string
 		if i == 0 {
@@ -175,7 +176,7 @@ func loopSegmentedScriptGenerate(
 		prevSegEndings = lastNSentences(script, 5)
 		log.Printf("[SEG PLAIN SCRIPT END]segment %d/%d chapter summary:%s\n",
 			i+1, parts, summary)
-		pushEvent(eventCh, "开始完成第%d/%d段音频文案，脚本摘要：%s\n\n", i+1, parts, prevSummary)
+		pushEvent(eventCh, global.ACTION_PIPELINE_SCRIPT, "开始完成第%d/%d段音频文案，脚本摘要：%s\n\n", i+1, parts, prevSummary)
 	}
 	log.Printf("[SEG PLAIN SCRIPT]all segment finished, total parts:%d\n", parts)
 	return &schema.Message{Content: "===SEGMENT_BOUNDARY===\n" + strings.Join(rewritten, "\n===SEGMENT_BOUNDARY===\n")}, nil

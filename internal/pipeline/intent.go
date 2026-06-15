@@ -39,7 +39,7 @@ func (i *inMemoryStore) Set(_ context.Context, checkPointID string, checkPoint [
 
 func NewIntentParser(ctx context.Context,
 	cm model.BaseChatModel,
-	kb *kb.KnowledgeBase) (compose.Runnable[string, *IntentResult], error) {
+	kb *kb.KnowledgeBase) (compose.Runnable[map[string]any, *IntentResult], error) {
 	sys := `你是音频制作助手的意图识别器和助手，当用户闲聊时友好回应，并引导到音频制作话题。
 
 【场景一：用户闲聊】
@@ -75,15 +75,13 @@ func NewIntentParser(ctx context.Context,
 
 	userTmpl := prompt.FromMessages(schema.FString,
 		schema.SystemMessage(sys),
+		schema.SystemMessage("{context}"),
+		schema.MessagesPlaceholder("history", false),
 		schema.UserMessage("用户输入：{user_input}"),
 	)
 
-	chain := compose.NewChain[string, *IntentResult]()
+	chain := compose.NewChain[map[string]any, *IntentResult]()
 	chain.
-		AppendLambda(compose.InvokableLambda(
-			func(ctx context.Context, input string) (map[string]any, error) {
-				return map[string]any{"user_input": input}, nil
-			}), compose.WithNodeName("intent_parser")).
 		AppendChatTemplate(userTmpl, compose.WithNodeName("intent_template")).
 		AppendChatModel(cm, compose.WithNodeName("intent_model")).
 		AppendLambda(compose.InvokableLambda(

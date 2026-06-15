@@ -6,6 +6,7 @@ import (
 	"dunkirk/internal/config"
 	"dunkirk/internal/handler"
 	"dunkirk/internal/kb"
+	"dunkirk/internal/memory"
 	"dunkirk/internal/pipeline"
 	"dunkirk/internal/script"
 	"dunkirk/internal/task"
@@ -89,6 +90,8 @@ func main() {
 	fileStatus := handler.NewFileStatus()
 	h := handler.New(taskMgr, knowledgeBase, ttsProvider, cfg, cm, fileStatus, scriptStore)
 	initParser, err := pipeline.NewIntentParser(ctx, cm, knowledgeBase)
+	convStore := memory.NewConversationStore(rdb)
+	h.SetConvStore(convStore)
 	if err != nil {
 		log.Fatalf("init intent parser: %v", err)
 	}

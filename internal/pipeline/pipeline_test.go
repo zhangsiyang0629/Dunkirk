@@ -43,7 +43,7 @@ func TestIntentParse(t *testing.T) {
 	}
 
 	input := "生成1到3章的内容，适合7岁小朋友听"
-	result, err := initParser.Invoke(ctx, input)
+	result, err := initParser.Invoke(ctx, map[string]any{"user_input": input})
 	if err != nil {
 		t.Fatalf("invoke intent parser: %v", err)
 	}
@@ -84,7 +84,7 @@ func TestBookInterrup(t *testing.T) {
 	input := "生成仙剑1到3章的内容，适合7岁小朋友听"
 	checkPointID := "test-checkpoint-1"
 	ctx = context.WithValue(ctx, "userID", "anonymous")
-	_, err = initParser.Invoke(ctx, input, compose.WithCheckPointID(checkPointID))
+	_, err = initParser.Invoke(ctx, map[string]any{"user_input": input}, compose.WithCheckPointID(checkPointID))
 	fmt.Printf("first invoke error: %v\n", err)
 	assert.Error(t, err)
 	interruptInfo, isInterrupt := compose.ExtractInterruptInfo(err)
@@ -95,7 +95,7 @@ func TestBookInterrup(t *testing.T) {
 	nctx := compose.BatchResumeWithData(ctx, map[string]any{
 		interruptContexts[0].ID: "仙剑奇侠传",
 	})
-	result, err := initParser.Invoke(nctx, "", compose.WithCheckPointID(checkPointID))
+	result, err := initParser.Invoke(nctx, map[string]any{}, compose.WithCheckPointID(checkPointID))
 	if err != nil {
 		t.Fatalf("resume intent parser: %v", err)
 	}
@@ -136,7 +136,7 @@ func TestGenerateGiveUpInterrup(t *testing.T) {
 	input := "生成圣斗士1到3章的内容，适合7岁小朋友听"
 	checkPointID := "test-checkpoint-1"
 	ctx = context.WithValue(ctx, "userID", "anonymous")
-	_, err = initParser.Invoke(ctx, input, compose.WithCheckPointID(checkPointID))
+	_, err = initParser.Invoke(ctx, map[string]any{"user_input": input}, compose.WithCheckPointID(checkPointID))
 	fmt.Printf("first invoke error: %v\n", err)
 	assert.Error(t, err)
 	interruptInfo, isInterrupt := compose.ExtractInterruptInfo(err)
@@ -147,7 +147,7 @@ func TestGenerateGiveUpInterrup(t *testing.T) {
 	nctx := compose.BatchResumeWithData(ctx, map[string]any{
 		interruptContexts[0].ID: GIVEUP,
 	})
-	result, err := initParser.Invoke(nctx, "", compose.WithCheckPointID(checkPointID))
+	result, err := initParser.Invoke(nctx, map[string]any{}, compose.WithCheckPointID(checkPointID))
 	if err != nil {
 		t.Fatalf("resume intent parser: %v", err)
 	}
@@ -187,7 +187,7 @@ func TestGenerateGenerateInterrup(t *testing.T) {
 	input := "生成圣斗士1到3章的内容，适合7岁小朋友听"
 	checkPointID := "test-checkpoint-1"
 	ctx = context.WithValue(ctx, "userID", "anonymous")
-	_, err = initParser.Invoke(ctx, input, compose.WithCheckPointID(checkPointID))
+	_, err = initParser.Invoke(ctx, map[string]any{"user_input": input}, compose.WithCheckPointID(checkPointID))
 	fmt.Printf("first invoke error: %v\n", err)
 	assert.Error(t, err)
 	interruptInfo, isInterrupt := compose.ExtractInterruptInfo(err)
@@ -198,7 +198,7 @@ func TestGenerateGenerateInterrup(t *testing.T) {
 	nctx := compose.BatchResumeWithData(ctx, map[string]any{
 		interruptContexts[0].ID: GENERATE_LLM,
 	})
-	result, err := initParser.Invoke(nctx, "", compose.WithCheckPointID(checkPointID))
+	result, err := initParser.Invoke(nctx, map[string]any{}, compose.WithCheckPointID(checkPointID))
 	if err != nil {
 		t.Fatalf("resume intent parser: %v", err)
 	}
