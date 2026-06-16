@@ -208,12 +208,14 @@ func ProcessBook(ctx context.Context,
 		if err != nil {
 			pushEvent(eventCh, global.ACTION_TTS_OVER, "第%d章失败: %v", ch.ChapterInt, err)
 			log.Printf("[ERROR]chapter %d/%d failed: %s", task.ChapterIdx, len(chapters), err)
+			results = append(results, task)
 			continue
 		}
 
 		if result.Error != "" {
 			pushEvent(eventCh, global.ACTION_TTS_OVER, "第%d章已跳过: %s", ch.ChapterInt, result.Error)
 			log.Printf("[ERROR]chapter %d/%d failed: %s", result.ChapterIdx, len(chapters), result.Error)
+			results = append(results, result)
 			continue
 		}
 

@@ -6,15 +6,19 @@ import (
 )
 
 type MemoryContext struct {
-	Summary           string
+	Summaries         []string
 	RecentGenerations []*GenerationRecord
 }
 
 func BuildContextPrompt(mc *MemoryContext) string {
 	var parts []string
 
-	if mc.Summary != "" {
-		parts = append(parts, fmt.Sprintf("【对话摘要】\n%s", mc.Summary))
+	if len(mc.Summaries) > 0 {
+		lines := make([]string, len(mc.Summaries))
+		for i, s := range mc.Summaries {
+			lines[i] = fmt.Sprintf("阶段%d：%s", i+1, s)
+		}
+		parts = append(parts, fmt.Sprintf("【对话摘要】\n%s", strings.Join(lines, "\n")))
 	}
 
 	if len(mc.RecentGenerations) > 0 {

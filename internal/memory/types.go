@@ -57,3 +57,8 @@ type Conversation struct {
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 }
+
+type SummaryEntry struct {
+	EndIdx  int    `json:"end_idx"`
+	Summary string `json:"summary"`
+}

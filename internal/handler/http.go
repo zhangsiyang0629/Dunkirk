@@ -152,17 +152,24 @@ func (h *Handler) Chat(c *gin.Context) {
 		CreatedAt: time.Now(),
 	})
 
+	const historyTokenBudget = 60000
+	h.trySummarize(ctx, userID, convID, historyTokenBudget)
+
 	// 加载记忆上下文并注入到用户输入前
-	summary, _ := h.convStore.GetSummary(c.Request.Context(), userID, convID)
+	summaryEntries, _ := h.convStore.GetSummaries(ctx, userID, convID)
+	summaryTexts := make([]string, 0, len(summaryEntries))
+	lastEnd := 0
+	for _, e := range summaryEntries {
+		summaryTexts = append(summaryTexts, e.Summary)
+		lastEnd = e.EndIdx
+	}
 	recentGens, _ := h.convStore.GetRecentGenerations(c.Request.Context(), userID, convID, 5)
 	memCtx := &memory.MemoryContext{
-		Summary:           summary,
+		Summaries:         summaryTexts,
 		RecentGenerations: recentGens,
 	}
 	contextStr := memory.BuildContextPrompt(memCtx)
-
-	const historyTokenBudget = 60000
-	recentMsgs, _ := h.convStore.GetRecentMessagesWithBudget(ctx, userID, convID, historyTokenBudget)
+	recentMsgs, _ := h.convStore.GetRecentMessagesFrom(ctx, userID, convID, int64(lastEnd))
 	var history []*schema.Message
 	for _, m := range recentMsgs {
 		role := schema.User
@@ -324,6 +331,7 @@ func (h *Handler) audioSSE(
 	sessionID := uuid.New().String()
 	t.UseSSML = h.cfg.TTSProvider == "azure"
 	t.CheckpointID = sessionID
+	t.ConvID = convID
 	fmt.Printf("tts provider: %v\n", h.cfg.TTSProvider)
 	log.Printf("[audio task create] %#v", *t)
 
@@ -396,7 +404,15 @@ func (h *Handler) audioSSE(
 					})
 					fmt.Fprintf(c.Writer, "event: progress\ndata: %s\n\n", eventData)
 					c.Writer.Flush()
-					appendMessageFunc(msg.Content, event.Action.CustomizedAction.(global.EventAction))
+					var evtAct global.EventAction
+					var eOk bool
+					if event.Action != nil {
+						evtAct, eOk = event.Action.CustomizedAction.(global.EventAction)
+						if !eOk {
+							evtAct = global.ACTION_DEF
+						}
+					}
+					appendMessageFunc(msg.Content, evtAct)
 				}
 			}
 		} else if event.Action != nil && event.Action.Interrupted != nil {
@@ -422,6 +438,67 @@ func (h *Handler) audioSSE(
 	c.Writer.Flush()
 }
 
+func (h *Handler) trySummarize(ctx context.Context, userID, convID string, budget int) {
+	total, _ := h.convStore.MessageCount(ctx, userID, convID)
+	if total == 0 {
+		return
+	}
+
+	summaries, _ := h.convStore.GetSummaries(ctx, userID, convID)
+	lastEnd := 0
+	if len(summaries) > 0 {
+		lastEnd = summaries[len(summaries)-1].EndIdx
+	}
+
+	if int(total)-1-lastEnd <= 0 {
+		return
+	}
+
+	msgs, _ := h.convStore.GetMessagesInRange(ctx, userID, convID, lastEnd, int(total)-1)
+	if len(msgs) == 0 {
+		return
+	}
+
+	acc := 0
+	splitIdx := 0 // 默认全部保留
+	for i, m := range msgs {
+		acc += estimateTokens(m.Content)
+		if acc > budget {
+			splitIdx = i
+			break
+		}
+	}
+
+	if splitIdx == 0 {
+		return
+	}
+
+	summarizeMsgs := msgs[:splitIdx]
+	var parts []string
+	for _, m := range summarizeMsgs {
+		role := "用户"
+		if m.Role == memory.RoleAgent {
+			role = "助手"
+		}
+		parts = append(parts, role+": "+m.Content)
+	}
+
+	resp, err := h.cm.Generate(ctx, []*schema.Message{
+		schema.SystemMessage("你是一个对话摘要助手。将对话内容压缩为一段简洁的摘要（200字以内），保留关键信息：用户需求、书籍、章节、审核结果。"),
+		schema.UserMessage(strings.Join(parts, "\n")),
+	})
+	if err != nil {
+		log.Printf("[summarize] failed: %v", err)
+		return
+	}
+
+	newEndIdx := lastEnd + splitIdx - 1
+	h.convStore.AppendSummary(ctx, userID, convID, &memory.SummaryEntry{
+		EndIdx:  newEndIdx,
+		Summary: resp.Content,
+	})
+}
+
 func (h *Handler) Resume(c *gin.Context) {
 	userID := c.GetHeader("X-User-ID")
 	if userID == "" {
@@ -440,6 +517,13 @@ func (h *Handler) Resume(c *gin.Context) {
 
 	if t, ok := h.tm.GetTaskByCheckpointID(req.CheckpointID); ok {
 		// Pipeline 审核中断
+		if t.ConvID != "" {
+			h.convStore.AppendMessage(c.Request.Context(), t.UserID, t.ConvID, &memory.Message{
+				Role:      memory.RoleUser,
+				Content:   "审核选择: " + req.Choice,
+				CreatedAt: time.Now(),
+			})
+		}
 		t.ResumeCh <- req.Choice
 		return
 	}
@@ -694,4 +778,17 @@ func (h *Handler) GetConversationMessages(c *gin.Context) {
 		return
 	}
 	c.JSON(200, gin.H{"messages": msgs})
+}
+
+func estimateTokens(s string) int {
+	runes := []rune(s)
+	ascii, nonAscii := 0, 0
+	for _, r := range runes {
+		if r < 128 {
+			ascii++
+		} else {
+			nonAscii++
+		}
+	}
+	return nonAscii/2 + ascii/4
 }

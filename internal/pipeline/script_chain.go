@@ -74,10 +74,13 @@ func loopSegmentedScriptGenerate(
 	firstUserMsgPromptFun := func(theContent, thePreEnding, ending string) string {
 		return fmt.Sprintf(`
 原文：%s
-上一回结尾：%s
+
+## 上一回结尾
+%s
 
 ## 要求
-- 请根据原文生成生动、吸引人的音频脚本。自由发挥，不限字数。如果上一回结尾不为空则开头请自然承接上一回内容。
+- 请根据原文生成生动、吸引人的音频脚本。自由发挥，不限字数。
+- 如果「上一回结尾」不为空则开头**必须**自然承接上一回内容，例如：上回说到...，书接上回等等，不要过多重复「上一回结尾」，。
 - %s
 
 
@@ -176,7 +179,7 @@ func loopSegmentedScriptGenerate(
 		prevSegEndings = lastNSentences(script, 5)
 		log.Printf("[SEG PLAIN SCRIPT END]segment %d/%d chapter summary:%s\n",
 			i+1, parts, summary)
-		pushEvent(eventCh, global.ACTION_PIPELINE_SCRIPT, "开始完成第%d/%d段音频文案，脚本摘要：%s\n\n", i+1, parts, prevSummary)
+		pushEvent(eventCh, global.ACTION_PIPELINE_SCRIPT, "完成第%d/%d段音频文案，脚本摘要：%s\n\n", i+1, parts, prevSummary)
 	}
 	log.Printf("[SEG PLAIN SCRIPT]all segment finished, total parts:%d\n", parts)
 	return &schema.Message{Content: "===SEGMENT_BOUNDARY===\n" + strings.Join(rewritten, "\n===SEGMENT_BOUNDARY===\n")}, nil

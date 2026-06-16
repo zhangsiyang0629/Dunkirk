@@ -115,9 +115,15 @@ func (c *ConversationStore) GetMessages(ctx context.Context, userID, convID stri
 	return msgs, nil
 }
 
-func (c *ConversationStore) GetRecentMessages(ctx context.Context, userID, convID string, n int) ([]*Message, error) {
+func (c *ConversationStore) MessageCount(ctx context.Context, userID, convID string) (int64, error) {
 	key := fmt.Sprintf("conv:%s:%s:msgs", userID, convID)
-	data, err := c.rdb.LRange(ctx, key, int64(-n), -1).Result()
+	return c.rdb.LLen(ctx, key).Result()
+}
+
+func (c *ConversationStore) GetMessagesInRange(ctx context.Context,
+	userID, convID string, start, end int) ([]*Message, error) {
+	key := fmt.Sprintf("conv:%s:%s:msgs", userID, convID)
+	data, err := c.rdb.LRange(ctx, key, int64(start), int64(end)).Result()
 	if err != nil {
 		return nil, err
 	}
@@ -131,32 +137,23 @@ func (c *ConversationStore) GetRecentMessages(ctx context.Context, userID, convI
 	return msgs, nil
 }
 
-func (c *ConversationStore) GetRecentMessagesWithBudget(ctx context.Context, userID, convID string, budget int) ([]*Message, error) {
+func (c *ConversationStore) GetRecentMessagesFrom(ctx context.Context, userID, convID string,
+	startIdx int64) ([]*Message, error) {
 	key := fmt.Sprintf("conv:%s:%s:msgs", userID, convID)
 	total, err := c.rdb.LLen(ctx, key).Result()
 	if err != nil {
 		return nil, err
 	}
-
-	var msgs []*Message
-	used := 0
-
-	for i := total - 1; i >= 0; i-- {
-		data, err := c.rdb.LIndex(ctx, key, i).Bytes()
-		if err != nil {
-			continue
-		}
+	data, err := c.rdb.LRange(ctx, key, startIdx, total-1).Result()
+	if err != nil {
+		return nil, err
+	}
+	msgs := make([]*Message, 0, len(data))
+	for _, d := range data {
 		var msg Message
-		if json.Unmarshal(data, &msg) != nil {
-			continue
+		if json.Unmarshal([]byte(d), &msg) == nil {
+			msgs = append(msgs, &msg)
 		}
-
-		tok := estimateTokens(msg.Content)
-		if used+tok > budget {
-			break
-		}
-		used += tok
-		msgs = append([]*Message{&msg}, msgs...)
 	}
 	return msgs, nil
 }
@@ -183,32 +180,25 @@ func (c *ConversationStore) GetRecentGenerations(ctx context.Context, userID, co
 	return records, nil
 }
 
-func (c *ConversationStore) SaveSummary(ctx context.Context, userID, convID, summary string) error {
-	key := fmt.Sprintf("conv:%s:%s:summary", userID, convID)
-	return c.rdb.Set(ctx, key, summary, 0).Err()
+func (c *ConversationStore) AppendSummary(ctx context.Context,
+	userID, convID string, entry *SummaryEntry) error {
+	key := fmt.Sprintf("conv:%s:%s:summaries", userID, convID)
+	data, _ := json.Marshal(entry)
+	return c.rdb.RPush(ctx, key, data).Err()
 }
 
-func (c *ConversationStore) GetSummary(ctx context.Context, userID, convID string) (string, error) {
-	key := fmt.Sprintf("conv:%s:%s:summary", userID, convID)
-	data, err := c.rdb.Get(ctx, key).Bytes()
-	if err == redis.Nil {
-		return "", nil
-	}
+func (c *ConversationStore) GetSummaries(ctx context.Context, userID, convID string) ([]*SummaryEntry, error) {
+	key := fmt.Sprintf("conv:%s:%s:summaries", userID, convID)
+	data, err := c.rdb.LRange(ctx, key, 0, -1).Result()
 	if err != nil {
-		return "", err
+		return nil, err
 	}
-	return string(data), nil
-}
-
-func estimateTokens(s string) int {
-	runes := []rune(s)
-	ascii, nonAscii := 0, 0
-	for _, r := range runes {
-		if r < 128 {
-			ascii++
-		} else {
-			nonAscii++
+	entries := make([]*SummaryEntry, 0, len(data))
+	for _, d := range data {
+		var e SummaryEntry
+		if json.Unmarshal([]byte(d), &e) == nil {
+			entries = append(entries, &e)
 		}
 	}
-	return nonAscii/2 + ascii/4
+	return entries, nil
 }

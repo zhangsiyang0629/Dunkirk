@@ -3,6 +3,7 @@ package task
 import (
 	"context"
 	"dunkirk/internal/agent"
+	"dunkirk/internal/memory"
 	"dunkirk/internal/pipeline"
 	"log"
 	"strings"
@@ -31,6 +32,7 @@ type Task struct {
 	UseSSML      bool
 	ResumeCh     chan string // pipeline 阻塞等待用户审核结果
 	CheckpointID string      // 用于 Resume 端点的 sessionID
+	ConvID       string
 }
 
 func (t *Task) NextEvent() (*adk.AgentEvent, bool) {
@@ -39,17 +41,19 @@ func (t *Task) NextEvent() (*adk.AgentEvent, bool) {
 }
 
 type Manager struct {
-	mu       sync.RWMutex
-	tasks    map[string]*Task
-	agent    *agent.Agent
-	pipeline *pipeline.Pipeline
+	mu        sync.RWMutex
+	tasks     map[string]*Task
+	agent     *agent.Agent
+	pipeline  *pipeline.Pipeline
+	convStore *memory.ConversationStore
 }
 
-func NewManager(a *agent.Agent, p *pipeline.Pipeline) *Manager {
+func NewManager(a *agent.Agent, p *pipeline.Pipeline, cs *memory.ConversationStore) *Manager {
 	return &Manager{
-		tasks:    make(map[string]*Task),
-		agent:    a,
-		pipeline: p,
+		tasks:     make(map[string]*Task),
+		agent:     a,
+		pipeline:  p,
+		convStore: cs,
 	}
 }
 
@@ -123,6 +127,20 @@ func (m *Manager) runPipeline(ctx context.Context, task *Task) {
 		log.Printf("[pipeline error] %v", err)
 		return
 	}
+
+	// 保存 GenerationRecord
+	if m.convStore != nil && task.ConvID != "" {
+		record := &memory.GenerationRecord{
+			ID:        task.ID,
+			UserID:    task.UserID,
+			BookRef:   task.FileRefID,
+			BookName:  task.BookName,
+			CreatedAt: time.Now(),
+			Chapters:  buildChapterStates(results),
+		}
+		m.convStore.AppendGeneration(ctx, task.UserID, task.ConvID, record)
+	}
+
 	task.Status = "completed"
 	log.Printf("task %s done, userID: %s, fileRefID: %s, topic: %s, resutlLen: %d",
 		task.ID, task.UserID, task.FileRefID, task.Intent.Topic, len(results))
@@ -164,4 +182,42 @@ func (m *Manager) GetTaskByCheckpointID(checkpointID string) (*Task, bool) {
 		}
 	}
 	return nil, false
+}
+
+func buildChapterStates(results []*pipeline.ChapterTask) []memory.ChapterState {
+	states := make([]memory.ChapterState, 0, len(results))
+	for _, r := range results {
+		ch := memory.ChapterState{
+			ChapterIdx: r.ChapterIdx,
+			ChapterInt: r.ChapterInt,
+			Topic:      r.Topic,
+			Status:     memory.ChapterStatusDone,
+		}
+		if r.Error != "" {
+			ch.Status = memory.ChapterStatusSkipped
+			ch.Error = r.Error
+		}
+		for i, seg := range r.ScriptSegments {
+			status := memory.SegmentStatusApproved
+			if r.Error != "" {
+				status = memory.SegmentStatusRejected
+			}
+			runes := []rune(seg)
+			preview := string(runes)
+			if len(runes) > 100 {
+				preview = string(runes[:100]) + "..."
+			}
+			segState := memory.SegmentState{
+				SegmentIdx: i,
+				Preview:    preview,
+				Status:     status,
+			}
+			if i < len(r.AudioPaths) {
+				segState.AudioPath = r.AudioPaths[i]
+			}
+			ch.Segments = append(ch.Segments, segState)
+		}
+		states = append(states, ch)
+	}
+	return states
 }
