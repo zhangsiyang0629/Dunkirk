@@ -9,7 +9,7 @@ import (
 	"github.com/cloudwego/eino/schema"
 )
 
-func pushEvent(eventCh chan *adk.AgentEvent, format string, args ...any) {
+func pushEvent(eventCh chan *adk.AgentEvent, customerAction any, format string, args ...any) {
 	if eventCh == nil {
 		return
 	}
@@ -21,6 +21,7 @@ func pushEvent(eventCh chan *adk.AgentEvent, format string, args ...any) {
 	eventCh <- &adk.AgentEvent{
 		AgentName: "pipeline",
 		Output:    output,
+		Action:    &adk.AgentAction{CustomizedAction: customerAction},
 	}
 }
 

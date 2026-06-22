@@ -39,7 +39,7 @@ func (i *inMemoryStore) Set(_ context.Context, checkPointID string, checkPoint [
 
 func NewIntentParser(ctx context.Context,
 	cm model.BaseChatModel,
-	kb *kb.KnowledgeBase) (compose.Runnable[string, *IntentResult], error) {
+	kb *kb.KnowledgeBase) (compose.Runnable[map[string]any, *IntentResult], error) {
 	sys := `你是音频制作助手的意图识别器和助手，当用户闲聊时友好回应，并引导到音频制作话题。
 
 【场景一：用户闲聊】
@@ -71,19 +71,19 @@ func NewIntentParser(ctx context.Context,
 - 用户明确说了书名，例如"三国演义" → book="三国演义"
 - 用户的书名说得不明确，例如"三国" → book="三国"，不要自行推断完整书名
 - 书名推断由后续系统逻辑处理，意图解析只需输出用户原文
-- 用户没提到书 → book=""`
+- 用户没提到书 → book=""
+- 用户输入上方的【最近生成记录】是生成本次音频前的最新记录，可以供你参考
+- 如果用户说"刚刚生成的"、"上一集"、"上一章"、"被拒绝的那集"等，结合【最近生成记录】推断具体指哪一章哪一集`
 
 	userTmpl := prompt.FromMessages(schema.FString,
 		schema.SystemMessage(sys),
+		schema.SystemMessage("{context}"),
+		schema.MessagesPlaceholder("history", false),
 		schema.UserMessage("用户输入：{user_input}"),
 	)
 
-	chain := compose.NewChain[string, *IntentResult]()
+	chain := compose.NewChain[map[string]any, *IntentResult]()
 	chain.
-		AppendLambda(compose.InvokableLambda(
-			func(ctx context.Context, input string) (map[string]any, error) {
-				return map[string]any{"user_input": input}, nil
-			}), compose.WithNodeName("intent_parser")).
 		AppendChatTemplate(userTmpl, compose.WithNodeName("intent_template")).
 		AppendChatModel(cm, compose.WithNodeName("intent_model")).
 		AppendLambda(compose.InvokableLambda(

@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"context"
+	"dunkirk/internal/global"
 	"io"
 
 	"github.com/cloudwego/eino/adk"
@@ -33,6 +34,7 @@ func (m *streamingModel) Stream(
 			if err != nil {
 				break
 			}
+
 			if eventCh != nil {
 				eventCh <- &adk.AgentEvent{
 					AgentName: "pipeline",
@@ -42,6 +44,7 @@ func (m *streamingModel) Stream(
 							MessageStream: schema.StreamReaderFromArray([]*schema.Message{chunk}),
 						},
 					},
+					Action: &adk.AgentAction{CustomizedAction: global.ACTION_PIPELINE_SCRIPT_GEN},
 				}
 			}
 			pw.Send(chunk, nil)
