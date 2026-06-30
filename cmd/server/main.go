@@ -87,11 +87,13 @@ func main() {
 	}
 
 	convStore := memory.NewConversationStore(rdb)
-	taskMgr := task.NewManager(agt, p, convStore)
+	profileStore := memory.NewProfileStore(rdb)
+	taskMgr := task.NewManager(agt, p, convStore, profileStore)
 	fileStatus := handler.NewFileStatus()
 	h := handler.New(taskMgr, knowledgeBase, ttsProvider, cfg, cm, fileStatus, scriptStore)
 	initParser, err := pipeline.NewIntentParser(ctx, cm, knowledgeBase)
 	h.SetConvStore(convStore)
+	h.SetProfileStore(profileStore)
 	if err != nil {
 		log.Fatalf("init intent parser: %v", err)
 	}

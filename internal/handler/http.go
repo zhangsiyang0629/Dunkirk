@@ -44,6 +44,7 @@ type Handler struct {
 	fileStatus   *FileStatus
 	scriptStore  *script.Store
 	convStore    *memory.ConversationStore
+	profileStore *memory.ProfileStore
 }
 
 func (h *Handler) SetConvStore(cs *memory.ConversationStore) {
@@ -52,6 +53,10 @@ func (h *Handler) SetConvStore(cs *memory.ConversationStore) {
 
 func (h *Handler) SetIntentParser(p compose.Runnable[map[string]any, *pipeline.IntentResult]) {
 	h.intentParser = p
+}
+
+func (h *Handler) SetProfileStore(ps *memory.ProfileStore) {
+	h.profileStore = ps
 }
 
 func New(tm *task.Manager,
@@ -169,6 +174,19 @@ func (h *Handler) Chat(c *gin.Context) {
 		RecentGenerations: recentGens,
 	}
 	contextStr := memory.BuildContextPrompt(memCtx)
+
+	profile, _ := h.profileStore.Get(ctx, userID)
+	profileStr := ""
+	if profile.PreferredStyle != "" {
+		profileStr = fmt.Sprintf("用户偏好：上次使用的风格「%s」", profile.PreferredStyle)
+		if profile.LastBookName != "" {
+			profileStr += fmt.Sprintf("，上次制作的书籍「%s」", profile.LastBookName)
+		}
+	}
+	if profileStr != "" {
+		contextStr = profileStr + "\n\n" + contextStr
+	}
+
 	recentMsgs, _ := h.convStore.GetRecentMessagesFrom(ctx, userID, convID, int64(lastEnd))
 	var history []*schema.Message
 	for _, m := range recentMsgs {
@@ -242,6 +260,11 @@ func (h *Handler) chatSSE(c *gin.Context,
 	input map[string]any,
 	userID string,
 	result *pipeline.IntentResult) {
+
+	if result.Style != "" {
+		h.profileStore.SaveField(c, userID, "preferred_style", result.Style)
+	}
+
 	intentJSON, _ := json.Marshal(result)
 	fmt.Fprintf(c.Writer, "event: intent\ndata: %s\n\n", intentJSON)
 	c.Writer.Flush()
@@ -304,6 +327,12 @@ func (h *Handler) audioSSE(
 			bookRef = uuid
 		}
 	}
+
+	h.profileStore.Save(c, userID, &memory.UserProfile{
+		PreferredStyle: result.Style,
+		LastBookName:   result.Book,
+		LastBookRef:    bookRef,
+	})
 
 	var input string
 	if bookRef != "" {

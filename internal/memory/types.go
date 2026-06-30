@@ -62,3 +62,9 @@ type SummaryEntry struct {
 	EndIdx  int    `json:"end_idx"`
 	Summary string `json:"summary"`
 }
+
+type UserProfile struct {
+	PreferredStyle string `json:"preferred_style,omitempty"`
+	LastBookName   string `json:"last_book_name,omitempty"`
+	LastBookRef    string `json:"last_book_ref,omitempty"`
+}

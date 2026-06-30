@@ -41,19 +41,22 @@ func (t *Task) NextEvent() (*adk.AgentEvent, bool) {
 }
 
 type Manager struct {
-	mu        sync.RWMutex
-	tasks     map[string]*Task
-	agent     *agent.Agent
-	pipeline  *pipeline.Pipeline
-	convStore *memory.ConversationStore
+	mu           sync.RWMutex
+	tasks        map[string]*Task
+	agent        *agent.Agent
+	pipeline     *pipeline.Pipeline
+	convStore    *memory.ConversationStore
+	profileStore *memory.ProfileStore
 }
 
-func NewManager(a *agent.Agent, p *pipeline.Pipeline, cs *memory.ConversationStore) *Manager {
+func NewManager(a *agent.Agent, p *pipeline.Pipeline, cs *memory.ConversationStore,
+	ps *memory.ProfileStore) *Manager {
 	return &Manager{
-		tasks:     make(map[string]*Task),
-		agent:     a,
-		pipeline:  p,
-		convStore: cs,
+		tasks:        make(map[string]*Task),
+		agent:        a,
+		pipeline:     p,
+		convStore:    cs,
+		profileStore: ps,
 	}
 }
 
